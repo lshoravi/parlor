@@ -23,3 +23,8 @@ fn run_scheme_test(filename: &str) {
 fn test_cml_basic() {
     run_scheme_test("cml_basic.scm");
 }
+
+#[test]
+fn test_cml_channels() {
+    run_scheme_test("cml_channels.scm");
+}

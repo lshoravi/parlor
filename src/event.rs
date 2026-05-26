@@ -8,6 +8,8 @@ use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 
+use crate::channels::{CmlChannel, Envelope};
+
 #[derive(Clone, Debug, Trace)]
 pub enum Event {
     Timer { nanos: u64 },
@@ -15,6 +17,8 @@ pub enum Event {
     Wrapped { inner: Box<Event>, transform: Procedure },
     Choice { alternatives: Vec<Event> },
     Guard { thunk: Procedure },
+    ChannelSend { channel: CmlChannel, msg: Value },
+    ChannelRecv { channel: CmlChannel },
 }
 
 impl SchemeCompatible for Event {
@@ -53,6 +57,43 @@ async fn perform(event: &Event) -> Result<Vec<Value>, Exception> {
         }
         Event::Choice { .. } => {
             Err(Exception::error("choose: not yet implemented"))
+        }
+        Event::ChannelSend { channel, msg } => {
+            if channel.is_rendezvous {
+                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                channel
+                    .sender
+                    .send(Envelope {
+                        msg: msg.clone(),
+                        ack: Some(ack_tx),
+                    })
+                    .await
+                    .map_err(|_| Exception::error("channel closed"))?;
+                ack_rx
+                    .await
+                    .map_err(|_| Exception::error("receiver dropped"))?;
+            } else {
+                channel
+                    .sender
+                    .send(Envelope {
+                        msg: msg.clone(),
+                        ack: None,
+                    })
+                    .await
+                    .map_err(|_| Exception::error("channel closed"))?;
+            }
+            Ok(vec![Value::from(false)])
+        }
+        Event::ChannelRecv { channel } => {
+            let mut rx = channel.receiver.lock().await;
+            let envelope = rx
+                .recv()
+                .await
+                .ok_or_else(|| Exception::error("channel closed"))?;
+            if let Some(ack) = envelope.ack {
+                let _ = ack.send(());
+            }
+            Ok(vec![envelope.msg])
         }
     }
 }

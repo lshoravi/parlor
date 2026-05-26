@@ -6,7 +6,7 @@ use scheme_rs::gc::{OpaqueGcPtr, Trace};
 use scheme_rs::records::{rtd, RecordTypeDescriptor, SchemeCompatible};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::event::Event;
 
@@ -31,7 +31,7 @@ impl SchemeCompatible for Condition {
 
 #[derive(Debug, Clone)]
 pub struct CmlNotifier {
-    pub notify: Arc<Notify>,
+    pub sem: Arc<Semaphore>,
 }
 
 unsafe impl Trace for CmlNotifier {
@@ -79,7 +79,7 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "%make-notifier", lib = "(cml conditions bridge)")]
 pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
     let n = CmlNotifier {
-        notify: Arc::new(Notify::new()),
+        sem: Arc::new(Semaphore::new(0)),
     };
     Ok(vec![Value::from_rust_type(n)])
 }
@@ -87,7 +87,7 @@ pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
 #[bridge(name = "%notify!", lib = "(cml conditions bridge)")]
 pub async fn notify(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<CmlNotifier>()?;
-    n.notify.notify_one();
+    n.sem.add_permits(1);
     Ok(vec![])
 }
 
@@ -95,7 +95,7 @@ pub async fn notify(n_val: &Value) -> Result<Vec<Value>, Exception> {
 pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<CmlNotifier>()?;
     let event = Event::NotifierWait {
-        notify: n.notify.clone(),
+        sem: n.sem.clone(),
     };
     Ok(vec![Value::from_rust_type(event)])
 }

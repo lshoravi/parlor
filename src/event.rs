@@ -10,7 +10,7 @@ use scheme_rs::proc::{ContBarrier, Procedure};
 use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::channels::{CmlChannel, Envelope};
 
@@ -24,7 +24,7 @@ pub enum Event {
     ChannelSend { channel: CmlChannel, msg: Value },
     ChannelRecv { channel: CmlChannel },
     ConditionWait { notify: Arc<Notify>, signalled: Arc<AtomicBool> },
-    NotifierWait { notify: Arc<Notify> },
+    NotifierWait { sem: Arc<Semaphore> },
 }
 
 unsafe impl Trace for Event {
@@ -217,8 +217,10 @@ fn perform(event: &Event) -> BoxFuture<'_, Result<Vec<Value>, Exception>> {
                 notify.notified().await;
                 Ok(vec![Value::from(true)])
             }
-            Event::NotifierWait { notify } => {
-                notify.notified().await;
+            Event::NotifierWait { sem } => {
+                sem.acquire().await
+                    .map_err(|_| Exception::error("notifier closed"))?
+                    .forget();
                 Ok(vec![Value::from(true)])
             }
         }

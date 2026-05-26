@@ -1,8 +1,12 @@
 (library (cml)
-  (export sync choose wrap guard)
-  (import (rnrs) (cml bridge))
+  (export sync choose wrap guard
+          spawn run-tasks yield)
+  (import (rnrs) (cml bridge) (cml tasks bridge))
 
   (define (sync evt) (%sync evt))
   (define (choose . evts) (apply %choose evts))
   (define (wrap evt f) (%wrap evt f))
-  (define (guard thunk) (%guard thunk)))
+  (define (guard thunk) (%guard thunk))
+  (define (spawn thunk) (%spawn thunk))
+  (define (run-tasks thunk) (%run-tasks thunk))
+  (define (yield) (%yield)))

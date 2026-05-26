@@ -38,3 +38,8 @@ fn test_cml_conditions() {
 fn test_cml_compose() {
     run_scheme_test("cml_compose.scm");
 }
+
+#[test]
+fn test_cml_tasks() {
+    run_scheme_test("cml_tasks.scm");
+}

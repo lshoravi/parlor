@@ -28,3 +28,8 @@ fn test_cml_basic() {
 fn test_cml_channels() {
     run_scheme_test("cml_channels.scm");
 }
+
+#[test]
+fn test_cml_conditions() {
+    run_scheme_test("cml_conditions.scm");
+}

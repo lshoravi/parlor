@@ -1,16 +1,18 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use scheme_rs::exceptions::Exception;
-use scheme_rs::gc::Trace;
+use scheme_rs::gc::{OpaqueGcPtr, Trace};
 use scheme_rs::proc::{ContBarrier, Procedure};
 use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
+use tokio::sync::Notify;
 
 use crate::channels::{CmlChannel, Envelope};
 
-#[derive(Clone, Debug, Trace)]
+#[derive(Clone, Debug)]
 pub enum Event {
     Timer { nanos: u64 },
     Custom { thunk: Procedure },
@@ -19,6 +21,38 @@ pub enum Event {
     Guard { thunk: Procedure },
     ChannelSend { channel: CmlChannel, msg: Value },
     ChannelRecv { channel: CmlChannel },
+    ConditionWait { notify: Arc<Notify>, signalled: Arc<AtomicBool> },
+    NotifierWait { notify: Arc<Notify> },
+}
+
+unsafe impl Trace for Event {
+    unsafe fn visit_children(&self, visitor: &mut dyn FnMut(OpaqueGcPtr)) {
+        match self {
+            Event::Timer { .. } => {}
+            Event::Custom { thunk } => unsafe { thunk.visit_children(visitor) },
+            Event::Wrapped { inner, transform } => unsafe {
+                inner.visit_children(visitor);
+                transform.visit_children(visitor);
+            },
+            Event::Choice { alternatives } => {
+                for alt in alternatives {
+                    unsafe { alt.visit_children(visitor) }
+                }
+            }
+            Event::Guard { thunk } => unsafe { thunk.visit_children(visitor) },
+            Event::ChannelSend { channel, msg } => unsafe {
+                channel.visit_children(visitor);
+                msg.visit_children(visitor);
+            },
+            Event::ChannelRecv { channel } => unsafe { channel.visit_children(visitor) },
+            Event::ConditionWait { .. } => {}
+            Event::NotifierWait { .. } => {}
+        }
+    }
+
+    unsafe fn finalize(&mut self) {
+        unsafe { std::ptr::drop_in_place(self as *mut Self) }
+    }
 }
 
 impl SchemeCompatible for Event {
@@ -94,6 +128,17 @@ async fn perform(event: &Event) -> Result<Vec<Value>, Exception> {
                 let _ = ack.send(());
             }
             Ok(vec![envelope.msg])
+        }
+        Event::ConditionWait { notify, signalled } => {
+            if signalled.load(Ordering::SeqCst) {
+                return Ok(vec![Value::from(true)]);
+            }
+            notify.notified().await;
+            Ok(vec![Value::from(true)])
+        }
+        Event::NotifierWait { notify } => {
+            notify.notified().await;
+            Ok(vec![Value::from(true)])
         }
     }
 }

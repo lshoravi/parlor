@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures::future::{BoxFuture, FutureExt};
+use rand::seq::SliceRandom;
 use scheme_rs::exceptions::Exception;
 use scheme_rs::gc::{OpaqueGcPtr, Trace};
 use scheme_rs::proc::{ContBarrier, Procedure};
@@ -65,82 +67,166 @@ impl SchemeCompatible for Event {
     }
 }
 
-async fn perform(event: &Event) -> Result<Vec<Value>, Exception> {
+fn collect_leaves(event: &Event) -> Vec<Event> {
     match event {
-        Event::Timer { nanos } => {
-            let duration = Duration::from_nanos(*nanos);
-            if !duration.is_zero() {
-                tokio::time::sleep(duration).await;
-            }
-            Ok(vec![Value::from(false)])
+        Event::Choice { alternatives } => {
+            alternatives.iter().flat_map(collect_leaves).collect()
         }
-        Event::Wrapped { inner, transform } => {
-            let result = Box::pin(perform(inner)).await?;
-            transform.call(&result, &mut ContBarrier::new()).await
+        other => vec![other.clone()],
+    }
+}
+
+fn try_perform(event: &Event) -> Option<Result<Vec<Value>, Exception>> {
+    match event {
+        Event::Timer { nanos } if *nanos == 0 => {
+            Some(Ok(vec![Value::from(false)]))
         }
-        Event::Guard { thunk } => {
-            let result = thunk.call(&[], &mut ContBarrier::new()).await?;
-            if result.is_empty() {
-                return Err(Exception::error("guard returned no value"));
-            }
-            let inner = result[0].try_to_rust_type::<Event>()?;
-            Box::pin(perform(&inner)).await
-        }
-        Event::Custom { thunk } => {
-            thunk.call(&[], &mut ContBarrier::new()).await
-        }
-        Event::Choice { .. } => {
-            Err(Exception::error("choose: not yet implemented"))
-        }
-        Event::ChannelSend { channel, msg } => {
-            if channel.is_rendezvous {
-                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                channel
-                    .sender
-                    .send(Envelope {
-                        msg: msg.clone(),
-                        ack: Some(ack_tx),
-                    })
-                    .await
-                    .map_err(|_| Exception::error("channel closed"))?;
-                ack_rx
-                    .await
-                    .map_err(|_| Exception::error("receiver dropped"))?;
+        Event::ConditionWait { signalled, .. } => {
+            if signalled.load(Ordering::SeqCst) {
+                Some(Ok(vec![Value::from(true)]))
             } else {
-                channel
-                    .sender
-                    .send(Envelope {
-                        msg: msg.clone(),
-                        ack: None,
-                    })
-                    .await
-                    .map_err(|_| Exception::error("channel closed"))?;
+                None
             }
-            Ok(vec![Value::from(false)])
         }
         Event::ChannelRecv { channel } => {
-            let mut rx = channel.receiver.lock().await;
-            let envelope = rx
-                .recv()
-                .await
-                .ok_or_else(|| Exception::error("channel closed"))?;
-            if let Some(ack) = envelope.ack {
-                let _ = ack.send(());
+            let mut rx = channel.receiver.try_lock().ok()?;
+            match rx.try_recv() {
+                Ok(envelope) => {
+                    if let Some(ack) = envelope.ack {
+                        let _ = ack.send(());
+                    }
+                    Some(Ok(vec![envelope.msg]))
+                }
+                Err(_) => None,
             }
-            Ok(vec![envelope.msg])
         }
-        Event::ConditionWait { notify, signalled } => {
-            if signalled.load(Ordering::SeqCst) {
-                return Ok(vec![Value::from(true)]);
-            }
-            notify.notified().await;
-            Ok(vec![Value::from(true)])
-        }
-        Event::NotifierWait { notify } => {
-            notify.notified().await;
-            Ok(vec![Value::from(true)])
-        }
+        _ => None,
     }
+}
+
+fn perform(event: &Event) -> BoxFuture<'_, Result<Vec<Value>, Exception>> {
+    async move {
+        match event {
+            Event::Timer { nanos } => {
+                let duration = Duration::from_nanos(*nanos);
+                if !duration.is_zero() {
+                    tokio::time::sleep(duration).await;
+                }
+                Ok(vec![Value::from(false)])
+            }
+            Event::Wrapped { inner, transform } => {
+                let result = perform(inner).await?;
+                transform.call(&result, &mut ContBarrier::new()).await
+            }
+            Event::Guard { thunk } => {
+                let result = thunk.call(&[], &mut ContBarrier::new()).await?;
+                if result.is_empty() {
+                    return Err(Exception::error("guard returned no value"));
+                }
+                let inner = result[0].try_to_rust_type::<Event>()?;
+                perform(&inner).await
+            }
+            Event::Custom { thunk } => {
+                thunk.call(&[], &mut ContBarrier::new()).await
+            }
+            Event::Choice { alternatives } => {
+                let leaves: Vec<Event> = alternatives.iter().flat_map(collect_leaves).collect();
+
+                if leaves.is_empty() {
+                    return Err(Exception::error("choose: no alternatives"));
+                }
+                if leaves.len() == 1 {
+                    return perform(&leaves[0]).await;
+                }
+
+                // Resolve guards
+                let mut resolved = Vec::new();
+                for leaf in &leaves {
+                    match leaf {
+                        Event::Guard { thunk } => {
+                            let result = thunk.call(&[], &mut ContBarrier::new()).await?;
+                            if result.is_empty() {
+                                return Err(Exception::error("guard returned no value"));
+                            }
+                            let inner = result[0].try_to_rust_type::<Event>()?;
+                            resolved.push((*inner).clone());
+                        }
+                        other => resolved.push(other.clone()),
+                    }
+                }
+
+                // Try path (random order)
+                let mut indices: Vec<usize> = (0..resolved.len()).collect();
+                indices.shuffle(&mut rand::rng());
+                for &i in &indices {
+                    if let Some(result) = try_perform(&resolved[i]) {
+                        return result;
+                    }
+                }
+
+                // Block path: race all as futures
+                let futures: Vec<BoxFuture<'_, Result<Vec<Value>, Exception>>> = resolved
+                    .into_iter()
+                    .map(|e| perform_owned(e))
+                    .collect();
+
+                let (result, _index, _remaining) = futures::future::select_all(futures).await;
+                result
+            }
+            Event::ChannelSend { channel, msg } => {
+                if channel.is_rendezvous {
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    channel
+                        .sender
+                        .send(Envelope {
+                            msg: msg.clone(),
+                            ack: Some(ack_tx),
+                        })
+                        .await
+                        .map_err(|_| Exception::error("channel closed"))?;
+                    ack_rx
+                        .await
+                        .map_err(|_| Exception::error("receiver dropped"))?;
+                } else {
+                    channel
+                        .sender
+                        .send(Envelope {
+                            msg: msg.clone(),
+                            ack: None,
+                        })
+                        .await
+                        .map_err(|_| Exception::error("channel closed"))?;
+                }
+                Ok(vec![Value::from(false)])
+            }
+            Event::ChannelRecv { channel } => {
+                let mut rx = channel.receiver.lock().await;
+                let envelope = rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| Exception::error("channel closed"))?;
+                if let Some(ack) = envelope.ack {
+                    let _ = ack.send(());
+                }
+                Ok(vec![envelope.msg])
+            }
+            Event::ConditionWait { notify, signalled } => {
+                if signalled.load(Ordering::SeqCst) {
+                    return Ok(vec![Value::from(true)]);
+                }
+                notify.notified().await;
+                Ok(vec![Value::from(true)])
+            }
+            Event::NotifierWait { notify } => {
+                notify.notified().await;
+                Ok(vec![Value::from(true)])
+            }
+        }
+    }.boxed()
+}
+
+fn perform_owned(event: Event) -> BoxFuture<'static, Result<Vec<Value>, Exception>> {
+    async move { perform(&event).await }.boxed()
 }
 
 #[bridge(name = "%sync", lib = "(cml bridge)")]

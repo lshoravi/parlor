@@ -33,3 +33,8 @@ fn test_cml_channels() {
 fn test_cml_conditions() {
     run_scheme_test("cml_conditions.scm");
 }
+
+#[test]
+fn test_cml_compose() {
+    run_scheme_test("cml_compose.scm");
+}

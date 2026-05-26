@@ -9,7 +9,7 @@
                   (output (make-channel 10)))
 
               ;; Paint task: wait for notification, report, loop 3 times
-              (spawn
+              (spawn-task
                 (lambda ()
                   (let loop ((count 0))
                     (if (= count 3)
@@ -20,7 +20,7 @@
                           (loop (+ count 1)))))))
 
               ;; Event dispatch: receive events, signal repaint
-              (spawn
+              (spawn-task
                 (lambda ()
                   (let loop ((i 0))
                     (when (< i 3)

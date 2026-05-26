@@ -9,7 +9,7 @@
   (run-tasks
     (lambda ()
       (let ((ch (make-channel 1)))
-        (spawn (lambda () (send ch 'hello)))
+        (spawn-task (lambda () (send ch 'hello)))
         (recv ch))))
   'hello))
 (display "spawn-channel passed\n")
@@ -19,7 +19,7 @@
   (run-tasks
     (lambda ()
       (let ((ch (make-channel)))
-        (spawn (lambda () (send ch 'rendezvous)))
+        (spawn-task (lambda () (send ch 'rendezvous)))
         (recv ch))))
   'rendezvous))
 (display "rendezvous-channel passed\n")
@@ -29,9 +29,9 @@
         (run-tasks
           (lambda ()
             (let ((ch (make-channel 10)))
-              (spawn (lambda () (send ch 1)))
-              (spawn (lambda () (send ch 2)))
-              (spawn (lambda () (send ch 3)))
+              (spawn-task (lambda () (send ch 1)))
+              (spawn-task (lambda () (send ch 2)))
+              (spawn-task (lambda () (send ch 3)))
               (+ (recv ch) (recv ch) (recv ch)))))))
   (assert (= result 6))
   (display "multi-spawn-drain passed\n"))
@@ -42,7 +42,7 @@
     (lambda ()
       (let ((n (make-notifier))
             (ch (make-channel 1)))
-        (spawn
+        (spawn-task
           (lambda ()
             (sync (notify-evt n))
             (send ch 'woke)))

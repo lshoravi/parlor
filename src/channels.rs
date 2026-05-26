@@ -21,6 +21,30 @@ pub struct CmlChannel {
     pub is_rendezvous: bool,
 }
 
+impl CmlChannel {
+    pub fn new_rendezvous() -> Self {
+        let (tx, rx) = mpsc::channel::<Envelope>(1);
+        Self {
+            sender: Arc::new(tx),
+            receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+            is_rendezvous: true,
+        }
+    }
+
+    pub fn new_buffered(capacity: usize) -> Self {
+        let (tx, rx) = mpsc::channel::<Envelope>(capacity.max(1));
+        Self {
+            sender: Arc::new(tx),
+            receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+            is_rendezvous: false,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        Value::from_rust_type(self)
+    }
+}
+
 impl std::fmt::Debug for CmlChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CmlChannel")

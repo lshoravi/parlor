@@ -1,0 +1,13 @@
+[package]
+name = "scheme-rs-cml"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+scheme-rs = { path = "../scheme-rs" }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+rand = "0.9"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

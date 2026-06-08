@@ -1,54 +1,72 @@
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use futures::future::{BoxFuture, FutureExt};
 use rand::seq::SliceRandom;
 use scheme_rs::exceptions::Exception;
-use scheme_rs::gc::{OpaqueGcPtr, Trace};
+use scheme_rs::gc::{Gc, OpaqueGcPtr, Trace};
 use scheme_rs::proc::{ContBarrier, Procedure};
 use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Mutex, Notify, oneshot};
 
-use crate::channels::{CmlChannel, Envelope};
-
-#[derive(Clone, Debug)]
-pub enum Event {
-    Timer { nanos: u64 },
-    Custom { thunk: Procedure },
-    Wrapped { inner: Box<Event>, transform: Procedure },
-    Choice { alternatives: Vec<Event> },
-    Guard { thunk: Procedure },
-    ChannelSend { channel: CmlChannel, msg: Value },
-    ChannelRecv { channel: CmlChannel },
-    ConditionWait { notify: Arc<Notify>, signalled: Arc<AtomicBool> },
-    NotifierWait { sem: Arc<Semaphore> },
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpState {
+    Waiting = 0,
+    Claimed = 1,
+    Synched = 2,
 }
 
-unsafe impl Trace for Event {
+pub type Flag = Arc<AtomicU8>;
+pub type ResumeTx = oneshot::Sender<Value>;
+
+pub fn new_flag() -> Flag {
+    Arc::new(AtomicU8::new(OpState::Waiting as u8))
+}
+
+pub fn cas(flag: &Flag, expected: OpState, desired: OpState) -> bool {
+    flag.compare_exchange(
+        expected as u8,
+        desired as u8,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    )
+    .is_ok()
+}
+
+pub fn flag_state(flag: &Flag) -> OpState {
+    match flag.load(Ordering::SeqCst) {
+        0 => OpState::Waiting,
+        1 => OpState::Claimed,
+        2 => OpState::Synched,
+        _ => unreachable!(),
+    }
+}
+
+pub type TryFn = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
+pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) + Send + Sync>;
+pub type CancelFn = Arc<dyn Fn() + Send + Sync>;
+
+pub struct BaseEvent {
+    pub try_fn: TryFn,
+    pub block_fn: BlockFn,
+    pub cancel_fn: CancelFn,
+    pub wrap_fns: Vec<Procedure>,
+}
+
+impl std::fmt::Debug for BaseEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BaseEvent")
+            .field("wrap_fns", &self.wrap_fns.len())
+            .finish_non_exhaustive()
+    }
+}
+
+unsafe impl Trace for BaseEvent {
     unsafe fn visit_children(&self, visitor: &mut dyn FnMut(OpaqueGcPtr)) {
-        match self {
-            Event::Timer { .. } => {}
-            Event::Custom { thunk } => unsafe { thunk.visit_children(visitor) },
-            Event::Wrapped { inner, transform } => unsafe {
-                inner.visit_children(visitor);
-                transform.visit_children(visitor);
-            },
-            Event::Choice { alternatives } => {
-                for alt in alternatives {
-                    unsafe { alt.visit_children(visitor) }
-                }
-            }
-            Event::Guard { thunk } => unsafe { thunk.visit_children(visitor) },
-            Event::ChannelSend { channel, msg } => unsafe {
-                channel.visit_children(visitor);
-                msg.visit_children(visitor);
-            },
-            Event::ChannelRecv { channel } => unsafe { channel.visit_children(visitor) },
-            Event::ConditionWait { .. } => {}
-            Event::NotifierWait { .. } => {}
+        for wrap in &self.wrap_fns {
+            unsafe { wrap.visit_children(visitor) };
         }
     }
 
@@ -57,7 +75,7 @@ unsafe impl Trace for Event {
     }
 }
 
-impl SchemeCompatible for Event {
+impl SchemeCompatible for BaseEvent {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(
             name: "cml-event",
@@ -67,198 +85,252 @@ impl SchemeCompatible for Event {
     }
 }
 
-fn collect_leaves(event: &Event) -> Vec<Event> {
-    match event {
-        Event::Choice { alternatives } => {
-            alternatives.iter().flat_map(collect_leaves).collect()
+#[derive(Debug)]
+pub struct ChoiceEvent {
+    pub alternatives: Vec<Value>,
+}
+
+unsafe impl Trace for ChoiceEvent {
+    unsafe fn visit_children(&self, visitor: &mut dyn FnMut(OpaqueGcPtr)) {
+        for alt in &self.alternatives {
+            unsafe { alt.visit_children(visitor) };
         }
-        other => vec![other.clone()],
+    }
+
+    unsafe fn finalize(&mut self) {
+        unsafe { std::ptr::drop_in_place(self as *mut Self) }
     }
 }
 
-fn try_perform(event: &Event) -> Option<Result<Vec<Value>, Exception>> {
-    match event {
-        Event::Timer { nanos } if *nanos == 0 => {
-            Some(Ok(vec![Value::from(false)]))
-        }
-        Event::ConditionWait { signalled, .. } => {
-            if signalled.load(Ordering::SeqCst) {
-                Some(Ok(vec![Value::from(true)]))
-            } else {
-                None
-            }
-        }
-        Event::ChannelRecv { channel } => {
-            let mut rx = channel.receiver.try_lock().ok()?;
-            match rx.try_recv() {
-                Ok(envelope) => {
-                    if let Some(ack) = envelope.ack {
-                        let _ = ack.send(());
-                    }
-                    Some(Ok(vec![envelope.msg]))
-                }
-                Err(_) => None,
-            }
-        }
-        _ => None,
+impl SchemeCompatible for ChoiceEvent {
+    fn rtd() -> Arc<RecordTypeDescriptor> {
+        rtd!(
+            name: "cml-choice-event",
+            opaque: true,
+            sealed: true,
+        )
     }
 }
 
-fn perform(event: &Event) -> BoxFuture<'_, Result<Vec<Value>, Exception>> {
-    async move {
-        match event {
-            Event::Timer { nanos } => {
-                let duration = Duration::from_nanos(*nanos);
-                if !duration.is_zero() {
-                    tokio::time::sleep(duration).await;
-                }
-                Ok(vec![Value::from(false)])
-            }
-            Event::Wrapped { inner, transform } => {
-                let result = perform(inner).await?;
-                transform.call(&result, &mut ContBarrier::new()).await
-            }
-            Event::Guard { thunk } => {
-                let result = thunk.call(&[], &mut ContBarrier::new()).await?;
-                if result.is_empty() {
-                    return Err(Exception::error("guard returned no value"));
-                }
-                let inner = result[0].try_to_rust_type::<Event>()?;
-                perform(&inner).await
-            }
-            Event::Custom { thunk } => {
-                thunk.call(&[], &mut ContBarrier::new()).await
-            }
-            Event::Choice { alternatives } => {
-                let leaves: Vec<Event> = alternatives.iter().flat_map(collect_leaves).collect();
-
-                if leaves.is_empty() {
-                    return Err(Exception::error("choose: no alternatives"));
-                }
-                if leaves.len() == 1 {
-                    return perform(&leaves[0]).await;
-                }
-
-                // Resolve guards
-                let mut resolved = Vec::new();
-                for leaf in &leaves {
-                    match leaf {
-                        Event::Guard { thunk } => {
-                            let result = thunk.call(&[], &mut ContBarrier::new()).await?;
-                            if result.is_empty() {
-                                return Err(Exception::error("guard returned no value"));
-                            }
-                            let inner = result[0].try_to_rust_type::<Event>()?;
-                            resolved.push((*inner).clone());
-                        }
-                        other => resolved.push(other.clone()),
-                    }
-                }
-
-                // Try path (random order)
-                let mut indices: Vec<usize> = (0..resolved.len()).collect();
-                indices.shuffle(&mut rand::rng());
-                for &i in &indices {
-                    if let Some(result) = try_perform(&resolved[i]) {
-                        return result;
-                    }
-                }
-
-                // Block path: race all as futures
-                let futures: Vec<BoxFuture<'_, Result<Vec<Value>, Exception>>> = resolved
-                    .into_iter()
-                    .map(|e| perform_owned(e))
-                    .collect();
-
-                let (result, _index, _remaining) = futures::future::select_all(futures).await;
-                result
-            }
-            Event::ChannelSend { channel, msg } => {
-                if channel.is_rendezvous {
-                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                    channel
-                        .sender
-                        .send(Envelope {
-                            msg: msg.clone(),
-                            ack: Some(ack_tx),
-                        })
-                        .await
-                        .map_err(|_| Exception::error("channel closed"))?;
-                    ack_rx
-                        .await
-                        .map_err(|_| Exception::error("receiver dropped"))?;
-                } else {
-                    channel
-                        .sender
-                        .send(Envelope {
-                            msg: msg.clone(),
-                            ack: None,
-                        })
-                        .await
-                        .map_err(|_| Exception::error("channel closed"))?;
-                }
-                Ok(vec![Value::from(false)])
-            }
-            Event::ChannelRecv { channel } => {
-                let mut rx = channel.receiver.lock().await;
-                let envelope = rx
-                    .recv()
-                    .await
-                    .ok_or_else(|| Exception::error("channel closed"))?;
-                if let Some(ack) = envelope.ack {
-                    let _ = ack.send(());
-                }
-                Ok(vec![envelope.msg])
-            }
-            Event::ConditionWait { notify, signalled } => {
-                if signalled.load(Ordering::SeqCst) {
-                    return Ok(vec![Value::from(true)]);
-                }
-                notify.notified().await;
-                Ok(vec![Value::from(true)])
-            }
-            Event::NotifierWait { sem } => {
-                sem.acquire().await
-                    .map_err(|_| Exception::error("notifier closed"))?
-                    .forget();
-                Ok(vec![Value::from(true)])
-            }
-        }
-    }.boxed()
+async fn apply_wraps(wrap_fns: &[Procedure], mut value: Value) -> Result<Value, Exception> {
+    for proc in wrap_fns {
+        let results = proc.call(&[value], &mut ContBarrier::new()).await?;
+        value = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| Exception::error("wrap function returned no values"))?;
+    }
+    Ok(value)
 }
 
-fn perform_owned(event: Event) -> BoxFuture<'static, Result<Vec<Value>, Exception>> {
-    async move { perform(&event).await }.boxed()
+pub async fn perform_base(event: &BaseEvent) -> Result<Value, Exception> {
+    if let Some(value) = (event.try_fn)() {
+        return apply_wraps(&event.wrap_fns, value).await;
+    }
+
+    let flag = new_flag();
+    let (tx, rx) = oneshot::channel();
+    (event.block_fn)(flag, tx);
+    let value = rx
+        .await
+        .map_err(|_| Exception::error("operation cancelled"))?;
+    apply_wraps(&event.wrap_fns, value).await
+}
+
+pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
+    let alts: Vec<Gc<BaseEvent>> = choice
+        .alternatives
+        .iter()
+        .map(|v| v.try_to_rust_type::<BaseEvent>())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if alts.is_empty() {
+        return Err(Exception::error("choose: no alternatives"));
+    }
+    if alts.len() == 1 {
+        return perform_base(&alts[0]).await;
+    }
+
+    let mut indices: Vec<usize> = (0..alts.len()).collect();
+    indices.shuffle(&mut rand::rng());
+    for &i in &indices {
+        if let Some(value) = (alts[i].try_fn)() {
+            return apply_wraps(&alts[i].wrap_fns, value).await;
+        }
+    }
+
+    let flag = new_flag();
+    let result_slot: Arc<Mutex<Option<(usize, Value)>>> = Arc::new(Mutex::new(None));
+    let notify = Arc::new(Notify::new());
+    let mut abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+
+    for (i, alt) in alts.iter().enumerate() {
+        let (tx, rx) = oneshot::channel::<Value>();
+        let slot = result_slot.clone();
+        let notify_clone = notify.clone();
+
+        let handle = tokio::spawn(async move {
+            if let Ok(value) = rx.await {
+                let mut guard = slot.lock().await;
+                if guard.is_none() {
+                    *guard = Some((i, value));
+                }
+                notify_clone.notify_one();
+            }
+        });
+        abort_handles.push(handle.abort_handle());
+
+        (alt.block_fn)(flag.clone(), tx);
+    }
+
+    notify.notified().await;
+
+    let (winner_index, value) = result_slot
+        .lock()
+        .await
+        .take()
+        .ok_or_else(|| Exception::error("choose: no result after notification"))?;
+
+    for (i, handle) in abort_handles.iter().enumerate() {
+        if i != winner_index {
+            handle.abort();
+            (alts[i].cancel_fn)();
+        }
+    }
+
+    apply_wraps(&alts[winner_index].wrap_fns, value).await
 }
 
 #[bridge(name = "%sync", lib = "(cml bridge)")]
 pub async fn sync_bridge(evt_val: &Value) -> Result<Vec<Value>, Exception> {
-    let event = evt_val.try_to_rust_type::<Event>()?;
-    perform(&event).await
+    if let Ok(event) = evt_val.try_to_rust_type::<BaseEvent>() {
+        let result = perform_base(&event).await?;
+        return Ok(vec![result]);
+    }
+    if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
+        let result = perform_choice(&choice).await?;
+        return Ok(vec![result]);
+    }
+    Err(Exception::error("sync: expected an event"))
 }
 
 #[bridge(name = "%wrap", lib = "(cml bridge)")]
 pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Value>, Exception> {
-    let event = evt_val.try_to_rust_type::<Event>()?;
-    let wrapped = Event::Wrapped {
-        inner: Box::new((*event).clone()),
-        transform,
-    };
-    Ok(vec![Value::from_rust_type(wrapped)])
+    if let Ok(event) = evt_val.try_to_rust_type::<BaseEvent>() {
+        let mut wraps = event.wrap_fns.clone();
+        wraps.push(transform);
+        let wrapped = BaseEvent {
+            try_fn: event.try_fn.clone(),
+            block_fn: event.block_fn.clone(),
+            cancel_fn: event.cancel_fn.clone(),
+            wrap_fns: wraps,
+        };
+        return Ok(vec![Value::from_rust_type(wrapped)]);
+    }
+    if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
+        let mut wrapped_alts: Vec<Value> = Vec::new();
+        for alt_val in &choice.alternatives {
+            let base = alt_val.try_to_rust_type::<BaseEvent>()?;
+            let mut wraps = base.wrap_fns.clone();
+            wraps.push(transform.clone());
+            let wrapped = BaseEvent {
+                try_fn: base.try_fn.clone(),
+                block_fn: base.block_fn.clone(),
+                cancel_fn: base.cancel_fn.clone(),
+                wrap_fns: wraps,
+            };
+            wrapped_alts.push(Value::from_rust_type(wrapped));
+        }
+        let choice = ChoiceEvent {
+            alternatives: wrapped_alts,
+        };
+        return Ok(vec![Value::from_rust_type(choice)]);
+    }
+    Err(Exception::error("wrap: expected an event"))
 }
 
 #[bridge(name = "%choose", lib = "(cml bridge)")]
 pub async fn choose_bridge(evts: &[Value]) -> Result<Vec<Value>, Exception> {
-    let mut alternatives = Vec::new();
+    let mut alternatives: Vec<Value> = Vec::new();
     for v in evts {
-        let e = v.try_to_rust_type::<Event>()?;
-        alternatives.push((*e).clone());
+        if v.try_to_rust_type::<BaseEvent>().is_ok() {
+            alternatives.push(v.clone());
+        } else if let Ok(choice) = v.try_to_rust_type::<ChoiceEvent>() {
+            alternatives.extend(choice.alternatives.iter().cloned());
+        } else {
+            return Err(Exception::error("choose: expected events"));
+        }
     }
-    let choice = Event::Choice { alternatives };
+    let choice = ChoiceEvent { alternatives };
     Ok(vec![Value::from_rust_type(choice)])
 }
 
-#[bridge(name = "%guard", lib = "(cml bridge)")]
-pub async fn guard_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
-    Ok(vec![Value::from_rust_type(Event::Guard { thunk })])
+fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
+    let alts: Vec<Gc<BaseEvent>> = match choice
+        .alternatives
+        .iter()
+        .map(|v| v.try_to_rust_type::<BaseEvent>())
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+
+    let mut indices: Vec<usize> = (0..alts.len()).collect();
+    indices.shuffle(&mut rand::rng());
+    for &i in &indices {
+        if let Some(value) = (alts[i].try_fn)() {
+            if cas(&flag, OpState::Waiting, OpState::Synched) {
+                let _ = tx.send(value);
+            }
+            return;
+        }
+    }
+
+    if let Some(first) = alts.first() {
+        (first.block_fn)(flag, tx);
+    }
+}
+
+#[bridge(name = "%guard-evt", lib = "(cml bridge)")]
+pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
+    let try_fn: TryFn = Arc::new(|| None);
+
+    let thunk_clone = thunk.clone();
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        let thunk = thunk_clone.clone();
+        tokio::spawn(async move {
+            let result = thunk.call(&[], &mut ContBarrier::new()).await;
+            match result {
+                Ok(results) => {
+                    let evt_val = match results.into_iter().next() {
+                        Some(v) => v,
+                        None => return,
+                    };
+                    if let Ok(inner) = evt_val.try_to_rust_type::<BaseEvent>() {
+                        if let Some(value) = (inner.try_fn)() {
+                            if cas(&flag, OpState::Waiting, OpState::Synched) {
+                                let _ = tx.send(value);
+                            }
+                        } else {
+                            (inner.block_fn)(flag, tx);
+                        }
+                    } else if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
+                        guard_sync_choice(&choice, flag, tx);
+                    }
+                }
+                Err(_) => {}
+            }
+        });
+    });
+
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    let event = BaseEvent {
+        try_fn,
+        block_fn,
+        cancel_fn,
+        wrap_fns: Vec::new(),
+    };
+    Ok(vec![Value::from_rust_type(event)])
 }

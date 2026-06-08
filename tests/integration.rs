@@ -1,4 +1,7 @@
 use scheme_rs::runtime::Runtime;
+use scheme_rs::value::Value;
+use scheme_rs_cml::channels::CmlChannel;
+use scheme_rs_cml::producer::{CmlConsumer, CmlProducer};
 use scheme_rs_cml as _;
 use std::path::PathBuf;
 
@@ -47,4 +50,73 @@ fn test_cml_tasks() {
 #[test]
 fn test_cml_integration() {
     run_scheme_test("cml_integration.scm");
+}
+
+#[test]
+fn test_cml_stress_channels() {
+    run_scheme_test("cml_stress_channels.scm");
+}
+
+#[test]
+fn test_cml_stress_choose() {
+    run_scheme_test("cml_stress_choose.scm");
+}
+
+#[test]
+fn test_cml_stress_tasks() {
+    run_scheme_test("cml_stress_tasks.scm");
+}
+
+#[test]
+fn test_cml_stress_conditions() {
+    run_scheme_test("cml_stress_conditions.scm");
+}
+
+#[test]
+fn test_cml_stress_mixed() {
+    run_scheme_test("cml_stress_mixed.scm");
+}
+
+#[test]
+fn test_cml_api_coverage() {
+    run_scheme_test("cml_api_coverage.scm");
+}
+
+#[tokio::test]
+async fn test_producer_consumer_roundtrip() {
+    let ch = CmlChannel::new_buffered(10);
+    let val = Value::from_rust_type(ch);
+    let producer = CmlProducer::from_channel_value(&val).unwrap();
+    let consumer = CmlConsumer::from_channel_value(&val).unwrap();
+
+    producer.send(Value::from(42i64)).await.unwrap();
+    let result = consumer.recv().await.unwrap();
+    assert_eq!(result, Value::from(42i64));
+}
+
+#[tokio::test]
+async fn test_producer_try_send_full() {
+    let ch = CmlChannel::new_buffered(1);
+    let val = Value::from_rust_type(ch);
+    let producer = CmlProducer::from_channel_value(&val).unwrap();
+
+    producer.try_send(Value::from(1i64)).unwrap();
+    let err = producer.try_send(Value::from(2i64));
+    assert!(err.is_err());
+}
+
+#[tokio::test]
+async fn test_producer_consumer_multiple() {
+    let ch = CmlChannel::new_buffered(10);
+    let val = Value::from_rust_type(ch);
+    let producer = CmlProducer::from_channel_value(&val).unwrap();
+    let consumer = CmlConsumer::from_channel_value(&val).unwrap();
+
+    for i in 0..10i64 {
+        producer.send(Value::from(i)).await.unwrap();
+    }
+    for i in 0..10i64 {
+        let result = consumer.recv().await.unwrap();
+        assert_eq!(result, Value::from(i));
+    }
 }

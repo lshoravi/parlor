@@ -1,0 +1,54 @@
+(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers))
+
+(run-tasks
+  (lambda ()
+    (let ((cv (make-condition))
+          (results (make-channel 20)))
+      (do ((i 0 (+ i 1)))
+          ((= i 20))
+        (spawn-task
+          (lambda ()
+            (wait cv)
+            (send results 'done))))
+      (yield)
+      (signal! cv)
+      (do ((i 0 (+ i 1)))
+          ((= i 20))
+        (assert (eq? (recv results) 'done))))))
+(display "many-waiters passed\n")
+
+(let ((cv (make-condition)))
+  (signal! cv)
+  (wait cv)
+  (display "signal-before-wait passed\n"))
+
+(run-tasks
+  (lambda ()
+    (let ((n (make-notifier))
+          (result-ch (make-channel 1)))
+      (do ((i 0 (+ i 1)))
+          ((= i 50))
+        (notify! n))
+      (spawn-task
+        (lambda ()
+          (do ((i 0 (+ i 1)))
+              ((= i 50))
+            (sync (notify-evt n)))
+          (send result-ch 'all-done)))
+      (assert (eq? (recv result-ch) 'all-done)))))
+(display "notifier-round-robin passed\n")
+
+(let ((cv (make-condition)))
+  (let ((result (sync (choose
+                         (wrap (wait-evt cv) (lambda (_) 'condition))
+                         (wrap (sleep-evt 0.001) (lambda (_) 'timer))))))
+    (assert (eq? result 'timer))
+    (display "condition-in-choose-timer-wins passed\n"))
+  (signal! cv)
+  (let ((result (sync (choose
+                         (wrap (wait-evt cv) (lambda (_) 'condition))
+                         (wrap (sleep-evt 10.0) (lambda (_) 'timer))))))
+    (assert (eq? result 'condition))
+    (display "condition-in-choose-condition-wins passed\n")))
+
+(display "all stress-conditions tests passed\n")

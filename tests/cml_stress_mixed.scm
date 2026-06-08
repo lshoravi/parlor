@@ -1,0 +1,46 @@
+(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers))
+
+(let ((base (make-custom-event (lambda () 0))))
+  (let loop ((evt base) (depth 0))
+    (if (= depth 10)
+        (let ((result (sync evt)))
+          (assert (= result 10))
+          (display "deep-wrap-chain passed\n"))
+        (loop (wrap evt (lambda (v) (+ v 1))) (+ depth 1)))))
+
+(let ((ch1 (make-channel 1))
+      (ch2 (make-channel 1)))
+  (send ch2 'from-ch2)
+  (let ((result (sync (guard-evt (lambda ()
+                                   (choose (recv-evt ch1) (recv-evt ch2)))))))
+    (assert (eq? result 'from-ch2))
+    (display "guard-returning-choose passed\n")))
+
+(run-tasks
+  (lambda ()
+    (let ((done-ch (make-channel 20)))
+      (do ((t 0 (+ t 1)))
+          ((= t 20))
+        (spawn-task
+          (lambda ()
+            (let ((ch (make-channel 10)))
+              (do ((i 0 (+ i 1)))
+                  ((= i 10))
+                (send ch 'msg)
+                (sync (choose
+                        (guard-evt (lambda () (sleep-evt 0.0)))
+                        (wrap (recv-evt ch) (lambda (v) v))))))
+            (send done-ch 'ok))))
+      (do ((t 0 (+ t 1)))
+          ((= t 20))
+        (recv done-ch)))))
+(display "wrap-choose-guard-load passed\n")
+
+(let ((ch (make-channel)))
+  (let ((result (sync (choose
+                         (make-custom-event (lambda () 'custom))
+                         (recv-evt ch)))))
+    (assert (eq? result 'custom))
+    (display "custom-event-in-choose-race passed\n")))
+
+(display "all stress-mixed tests passed\n")

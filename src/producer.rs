@@ -2,59 +2,59 @@ use std::sync::Arc;
 
 use scheme_rs::exceptions::Exception;
 use scheme_rs::value::Value;
-use tokio::sync::mpsc;
 
-use crate::channels::{CmlChannel, Envelope};
+use crate::channels::CmlChannel;
 
-/// Rust-side handle for sending into a CML channel.
 pub struct CmlProducer {
-    sender: Arc<mpsc::Sender<Envelope>>,
+    channel: CmlChannel,
 }
 
 impl CmlProducer {
     pub fn from_channel_value(val: &Value) -> Result<Self, Exception> {
         let ch = val.try_to_rust_type::<CmlChannel>()?;
         Ok(Self {
-            sender: ch.sender.clone(),
+            channel: (*ch).clone(),
         })
     }
 
     pub fn try_send(&self, val: Value) -> Result<(), Exception> {
-        self.sender
-            .try_send(Envelope { msg: val, ack: None })
-            .map_err(|_| Exception::error("channel full or closed"))
+        if let (Some(buf), Some(cap)) = (&self.channel.inner.buffer, self.channel.inner.capacity)
+        {
+            let guard = buf.load();
+            if guard.len() < cap {
+                let val_for_buf = val;
+                buf.rcu(move |b| {
+                    let mut b = (**b).clone();
+                    b.push_back(val_for_buf.clone());
+                    Arc::new(b)
+                });
+                return Ok(());
+            }
+        }
+        Err(Exception::error("channel full or closed"))
     }
 
     pub async fn send(&self, val: Value) -> Result<(), Exception> {
-        self.sender
-            .send(Envelope { msg: val, ack: None })
-            .await
-            .map_err(|_| Exception::error("channel closed"))
+        let event = crate::channels::send_event(self.channel.clone(), val);
+        crate::event::perform_base(&event).await?;
+        Ok(())
     }
 }
 
-/// Rust-side handle for receiving from a CML channel.
 pub struct CmlConsumer {
-    receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Envelope>>>,
+    channel: CmlChannel,
 }
 
 impl CmlConsumer {
     pub fn from_channel_value(val: &Value) -> Result<Self, Exception> {
         let ch = val.try_to_rust_type::<CmlChannel>()?;
         Ok(Self {
-            receiver: ch.receiver.clone(),
+            channel: (*ch).clone(),
         })
     }
 
     pub async fn recv(&self) -> Result<Value, Exception> {
-        let mut rx = self.receiver.lock().await;
-        let envelope = rx
-            .recv()
-            .await
-            .ok_or_else(|| Exception::error("channel closed"))?;
-        if let Some(ack) = envelope.ack {
-            let _ = ack.send(());
-        }
-        Ok(envelope.msg)
+        let event = crate::channels::recv_event(self.channel.clone());
+        crate::event::perform_base(&event).await
     }
 }

@@ -1,0 +1,65 @@
+(import (rnrs) (cml) (cml channels))
+
+(let ((total
+        (run-tasks
+          (lambda ()
+            (let ((result-ch (make-channel 20)))
+              (do ((i 0 (+ i 1)))
+                  ((= i 20))
+                (let ((idx i))
+                  (spawn-task (lambda () (send result-ch idx)))))
+              (let loop ((count 0) (sum 0))
+                (if (= count 20)
+                    (cons count sum)
+                    (loop (+ count 1) (+ sum (recv result-ch))))))))))
+  (assert (= (car total) 20))
+  (assert (= (cdr total) 190))
+  (display "spawn-many passed\n"))
+
+(let ((result
+        (run-tasks
+          (lambda ()
+            (let ((chs (let loop ((i 0) (acc '()))
+                         (if (= i 11)
+                             (reverse acc)
+                             (loop (+ i 1) (cons (make-channel 1) acc))))))
+              (let ((input-ch (car chs))
+                    (output-ch (list-ref chs 10)))
+                (do ((stage 0 (+ stage 1)))
+                    ((= stage 10))
+                  (let ((in-ch (list-ref chs stage))
+                        (out-ch (list-ref chs (+ stage 1))))
+                    (spawn-task
+                      (lambda ()
+                        (send out-ch (+ (recv in-ch) 1))))))
+                (send input-ch 0)
+                (recv output-ch)))))))
+  (assert (= result 10))
+  (display "pipeline passed\n"))
+
+(run-tasks
+  (lambda ()
+    (let ((mutex (make-channel 1))
+          (done1 (make-channel 1))
+          (done2 (make-channel 1)))
+      (send mutex 0)
+      (spawn-task
+        (lambda ()
+          (do ((i 0 (+ i 1)))
+              ((= i 25))
+            (let ((val (recv mutex)))
+              (send mutex (+ val 1))))
+          (send done1 'ok)))
+      (spawn-task
+        (lambda ()
+          (do ((i 0 (+ i 1)))
+              ((= i 25))
+            (let ((val (recv mutex)))
+              (send mutex (+ val 1))))
+          (send done2 'ok)))
+      (recv done1)
+      (recv done2)
+      (assert (= (recv mutex) 50)))))
+(display "mutex-fairness passed\n")
+
+(display "all stress-tasks tests passed\n")

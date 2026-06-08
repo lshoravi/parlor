@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml timers) (cml conditions) (cml bridge))
+(import (rnrs) (cml) (cml timers) (cml conditions))
 
 ;; wrap transforms the result
 (let ((result (sync (wrap (sleep-evt 0.0) (lambda (_) 'wrapped)))))
@@ -21,8 +21,7 @@
     (assert (eq? result 'condition))
     (display "choose-try-path passed\n")))
 
-;; guard produces event at sync time (use %guard to avoid name clash with rnrs guard)
-(let ((result (sync (%guard (lambda () (sleep-evt 0.0))))))
+(let ((result (sync (guard-evt (lambda () (sleep-evt 0.0))))))
   (display "guard passed\n"))
 
 (display "all composition tests passed\n")

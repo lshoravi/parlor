@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-scheme-rs = { path = "../scheme-rs", features = ["async", "tokio"] }
+scheme-rs = { git = "ssh://git@github.com/lshoravi/scheme-rs.git", branch = "main", features = ["async", "tokio"] }
 tokio = { version = "1", features = ["full"] }
+arc-swap = "1"
+imbl = "3"
 futures = "0.3"
 rand = "0.9"
 

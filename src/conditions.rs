@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use scheme_rs::exceptions::Exception;
 use scheme_rs::gc::{OpaqueGcPtr, Trace};
-use scheme_rs::records::{rtd, RecordTypeDescriptor, SchemeCompatible};
+use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::event::Event;
+use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas};
 
 #[derive(Debug, Clone)]
 pub struct Condition {
@@ -69,9 +69,42 @@ pub async fn signal(cv_val: &Value) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "%wait-evt", lib = "(cml conditions bridge)")]
 pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     let cv = cv_val.try_to_rust_type::<Condition>()?;
-    let event = Event::ConditionWait {
-        notify: cv.notify.clone(),
-        signalled: cv.signalled.clone(),
+    let signalled = cv.signalled.clone();
+    let notify = cv.notify.clone();
+
+    let signalled_try = signalled.clone();
+    let try_fn: TryFn = Arc::new(move || {
+        if signalled_try.load(Ordering::SeqCst) {
+            Some(Value::from(true))
+        } else {
+            None
+        }
+    });
+
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        let signalled = signalled.clone();
+        let notify = notify.clone();
+        tokio::spawn(async move {
+            if signalled.load(Ordering::SeqCst) {
+                if cas(&flag, OpState::Waiting, OpState::Synched) {
+                    let _ = tx.send(Value::from(true));
+                }
+                return;
+            }
+            notify.notified().await;
+            if cas(&flag, OpState::Waiting, OpState::Synched) {
+                let _ = tx.send(Value::from(true));
+            }
+        });
+    });
+
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    let event = BaseEvent {
+        try_fn,
+        block_fn,
+        cancel_fn,
+        wrap_fns: Vec::new(),
     };
     Ok(vec![Value::from_rust_type(event)])
 }
@@ -94,8 +127,42 @@ pub async fn notify(n_val: &Value) -> Result<Vec<Value>, Exception> {
 #[bridge(name = "%notify-evt", lib = "(cml conditions bridge)")]
 pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<CmlNotifier>()?;
-    let event = Event::NotifierWait {
-        sem: n.sem.clone(),
+    let sem = n.sem.clone();
+
+    let sem_try = sem.clone();
+    let try_fn: TryFn = Arc::new(move || match sem_try.try_acquire() {
+        Ok(permit) => {
+            permit.forget();
+            Some(Value::from(true))
+        }
+        Err(_) => None,
+    });
+
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        let sem = sem.clone();
+        tokio::spawn(async move {
+            match sem.acquire().await {
+                Ok(permit) => {
+                    if cas(&flag, OpState::Waiting, OpState::Synched) {
+                        permit.forget();
+                        let _ = tx.send(Value::from(true));
+                    } else {
+                        drop(permit);
+                        sem.add_permits(1);
+                    }
+                }
+                Err(_) => {}
+            }
+        });
+    });
+
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    let event = BaseEvent {
+        try_fn,
+        block_fn,
+        cancel_fn,
+        wrap_fns: Vec::new(),
     };
     Ok(vec![Value::from_rust_type(event)])
 }

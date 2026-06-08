@@ -14,15 +14,11 @@ pub async fn make_custom_event(thunk: Procedure) -> Result<Vec<Value>, Exception
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let thunk = thunk.clone();
         tokio::spawn(async move {
-            match thunk.call(&[], &mut ContBarrier::new()).await {
-                Ok(results) => {
-                    if cas(&flag, OpState::Waiting, OpState::Synched) {
-                        let value = results.into_iter().next().unwrap_or(Value::from(false));
-                        let _ = tx.send(value);
-                    }
+            if let Ok(results) = thunk.call(&[], &mut ContBarrier::new()).await
+                && cas(&flag, OpState::Waiting, OpState::Synched) {
+                    let value = results.into_iter().next().unwrap_or(Value::from(false));
+                    let _ = tx.send(value);
                 }
-                Err(_) => {}
-            }
         });
     });
 

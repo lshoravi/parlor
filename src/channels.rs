@@ -176,8 +176,8 @@ pub fn recv_event(channel: CmlChannel) -> BaseEvent {
 
         if let Some(ref buf) = ch.inner.buffer {
             let guard = buf.load();
-            if !guard.is_empty() {
-                if cas(&flag, OpState::Waiting, OpState::Synched) {
+            if !guard.is_empty()
+                && cas(&flag, OpState::Waiting, OpState::Synched) {
                     let popped: Arc<std::sync::Mutex<Option<Value>>> =
                         Arc::new(std::sync::Mutex::new(None));
                     let popped_clone = popped.clone();
@@ -199,7 +199,6 @@ pub fn recv_event(channel: CmlChannel) -> BaseEvent {
                     }
                     return;
                 }
-            }
         }
 
         let putq = ch.inner.putq.load();

@@ -141,17 +141,14 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let sem = sem.clone();
         tokio::spawn(async move {
-            match sem.acquire().await {
-                Ok(permit) => {
-                    if cas(&flag, OpState::Waiting, OpState::Synched) {
-                        permit.forget();
-                        let _ = tx.send(Value::from(true));
-                    } else {
-                        drop(permit);
-                        sem.add_permits(1);
-                    }
+            if let Ok(permit) = sem.acquire().await {
+                if cas(&flag, OpState::Waiting, OpState::Synched) {
+                    permit.forget();
+                    let _ = tx.send(Value::from(true));
+                } else {
+                    drop(permit);
+                    sem.add_permits(1);
                 }
-                Err(_) => {}
             }
         });
     });

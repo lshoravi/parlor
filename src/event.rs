@@ -314,25 +314,22 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
         let thunk = thunk_clone.clone();
         tokio::spawn(async move {
             let result = thunk.call(&[], &mut ContBarrier::new()).await;
-            match result {
-                Ok(results) => {
-                    let evt_val = match results.into_iter().next() {
-                        Some(v) => v,
-                        None => return,
-                    };
-                    if let Ok(inner) = evt_val.try_to_rust_type::<BaseEvent>() {
-                        if let Some(value) = (inner.try_fn)() {
-                            if cas(&flag, OpState::Waiting, OpState::Synched) {
-                                let _ = tx.send(value);
-                            }
-                        } else {
-                            (inner.block_fn)(flag, tx);
+            if let Ok(results) = result {
+                let evt_val = match results.into_iter().next() {
+                    Some(v) => v,
+                    None => return,
+                };
+                if let Ok(inner) = evt_val.try_to_rust_type::<BaseEvent>() {
+                    if let Some(value) = (inner.try_fn)() {
+                        if cas(&flag, OpState::Waiting, OpState::Synched) {
+                            let _ = tx.send(value);
                         }
-                    } else if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
-                        guard_sync_choice(&choice, flag, tx);
+                    } else {
+                        (inner.block_fn)(flag, tx);
                     }
+                } else if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
+                    guard_sync_choice(&choice, flag, tx);
                 }
-                Err(_) => {}
             }
         });
     });

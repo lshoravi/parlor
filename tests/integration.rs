@@ -82,6 +82,16 @@ fn test_cml_api_coverage() {
     run_scheme_test("cml_api_coverage.scm");
 }
 
+#[test]
+fn test_cml_gc_double_decrement() {
+    run_scheme_test("cml_gc_double_decrement.scm");
+}
+
+#[test]
+fn test_cml_gc_then_spawn() {
+    run_scheme_test("cml_gc_then_spawn.scm");
+}
+
 #[tokio::test]
 async fn test_producer_consumer_roundtrip() {
     let ch = CmlChannel::new_buffered(10);

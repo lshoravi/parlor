@@ -71,7 +71,15 @@ unsafe impl Trace for BaseEvent {
     }
 
     unsafe fn finalize(&mut self) {
-        unsafe { std::ptr::drop_in_place(self as *mut Self) }
+        unsafe {
+            std::ptr::drop_in_place(&mut self.try_fn);
+            std::ptr::drop_in_place(&mut self.block_fn);
+            std::ptr::drop_in_place(&mut self.cancel_fn);
+            // Don't drop Gc handles in wrap_fns — the GC's for_each_child →
+            // decrement already handled them. Just free the Vec buffer.
+            self.wrap_fns.set_len(0);
+            std::ptr::drop_in_place(&mut self.wrap_fns);
+        }
     }
 }
 
@@ -98,7 +106,12 @@ unsafe impl Trace for ChoiceEvent {
     }
 
     unsafe fn finalize(&mut self) {
-        unsafe { std::ptr::drop_in_place(self as *mut Self) }
+        unsafe {
+            // Don't drop Gc-backed Values — the GC's for_each_child →
+            // decrement already handled them. Just free the Vec buffer.
+            self.alternatives.set_len(0);
+            std::ptr::drop_in_place(&mut self.alternatives);
+        }
     }
 }
 

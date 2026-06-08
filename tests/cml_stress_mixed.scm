@@ -1,4 +1,5 @@
-(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers))
+(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers)
+        (prefix (async) tokio/))
 
 (let ((base (make-custom-event (lambda () 0))))
   (let loop ((evt base) (depth 0))
@@ -16,24 +17,22 @@
     (assert (eq? result 'from-ch2))
     (display "guard-returning-choose passed\n")))
 
-(run-tasks
-  (lambda ()
-    (let ((done-ch (make-channel 20)))
-      (do ((t 0 (+ t 1)))
-          ((= t 20))
-        (spawn-task
-          (lambda ()
-            (let ((ch (make-channel 10)))
-              (do ((i 0 (+ i 1)))
-                  ((= i 10))
-                (send ch 'msg)
-                (sync (choose
-                        (guard-evt (lambda () (sleep-evt 0.0)))
-                        (wrap (recv-evt ch) (lambda (v) v))))))
-            (send done-ch 'ok))))
-      (do ((t 0 (+ t 1)))
-          ((= t 20))
-        (recv done-ch)))))
+(let ((done-ch (make-channel 20)))
+  (do ((t 0 (+ t 1)))
+      ((= t 20))
+    (tokio/spawn
+      (lambda ()
+        (let ((ch (make-channel 10)))
+          (do ((i 0 (+ i 1)))
+              ((= i 10))
+            (send ch 'msg)
+            (sync (choose
+                    (guard-evt (lambda () (sleep-evt 0.0)))
+                    (wrap (recv-evt ch) (lambda (v) v))))))
+        (send done-ch 'ok))))
+  (do ((t 0 (+ t 1)))
+      ((= t 20))
+    (recv done-ch)))
 (display "wrap-choose-guard-load passed\n")
 
 (let ((ch (make-channel)))

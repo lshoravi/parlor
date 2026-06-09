@@ -97,6 +97,11 @@ fn test_sleep_then_spawn() {
     run_scheme_test("debug_spawn.scm");
 }
 
+#[test]
+fn test_cml_io() {
+    run_scheme_test("cml_io.scm");
+}
+
 #[tokio::test]
 async fn test_producer_consumer_roundtrip() {
     let ch = CmlChannel::new_buffered(10);

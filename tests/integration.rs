@@ -102,6 +102,11 @@ fn test_cml_io() {
     run_scheme_test("cml_io.scm");
 }
 
+#[test]
+fn test_cml_echo_server() {
+    run_scheme_test("cml_echo_server.scm");
+}
+
 #[tokio::test]
 async fn test_producer_consumer_roundtrip() {
     let ch = CmlChannel::new_buffered(10);

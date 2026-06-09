@@ -1,10 +1,12 @@
+use std::path::PathBuf;
+use std::sync::Once;
+use std::time::Duration;
+
 use scheme_rs::runtime::Runtime;
 use scheme_rs::value::Value;
 use parlor::channels::Channel;
 use parlor::producer::{Consumer, Producer};
 use parlor as _;
-use std::path::PathBuf;
-use std::sync::Once;
 
 static INIT_ENV: Once = Once::new();
 
@@ -144,4 +146,67 @@ async fn test_producer_consumer_multiple() {
         let result = consumer.recv().await.unwrap();
         assert_eq!(result, Value::from(i));
     }
+}
+
+#[tokio::test]
+async fn test_cancelled_recv_does_not_steal_message() {
+    let ch = Channel::new_rendezvous();
+    let val = Value::from_rust_type(ch);
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+    let ghost = Consumer::from_channel_value(&val).unwrap();
+
+    // Block a recv, then cancel it via timeout. This leaves a ghost
+    // RecvWaiter in getq with flag=Waiting.
+    let _ = tokio::time::timeout(Duration::from_millis(10), ghost.recv()).await;
+
+    // Send a message. The try_fn will find the ghost waiter, CAS its flag
+    // Waiting→Synched, and try to deliver through the ghost's dead tx.
+    // The send thinks it succeeded, but the message goes nowhere.
+    let send_handle = tokio::spawn({
+        let val = val.clone();
+        async move {
+            let p = Producer::from_channel_value(&val).unwrap();
+            p.send(Value::from(42i64)).await.unwrap();
+        }
+    });
+
+    // A real receiver should get the message. Without a Drop guard on the
+    // flag, the ghost stole it and this times out.
+    let result = tokio::time::timeout(Duration::from_millis(200), consumer.recv()).await;
+    assert!(result.is_ok(), "message was lost to a ghost waiter from a cancelled recv");
+    assert_eq!(result.unwrap().unwrap(), Value::from(42i64));
+
+    send_handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_cancelled_send_message_not_delivered() {
+    let ch = Channel::new_rendezvous();
+    let val = Value::from_rust_type(ch);
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+
+    // Block a send, then cancel it. The ghost SendWaiter stays in putq
+    // with flag=Waiting and message=99.
+    let ghost_producer = Producer::from_channel_value(&val).unwrap();
+    let _ = tokio::time::timeout(
+        Duration::from_millis(10),
+        ghost_producer.send(Value::from(99i64)),
+    ).await;
+
+    // Now do a real send + recv. The receiver should get 42, not the
+    // ghost's 99.
+    let send_handle = tokio::spawn({
+        let val = val.clone();
+        async move {
+            let p = Producer::from_channel_value(&val).unwrap();
+            p.send(Value::from(42i64)).await.unwrap();
+        }
+    });
+
+    let result = tokio::time::timeout(Duration::from_millis(200), consumer.recv()).await;
+    assert!(result.is_ok(), "recv timed out");
+    let received = result.unwrap().unwrap();
+    assert_eq!(received, Value::from(42i64), "receiver got ghost message instead of real one");
+
+    send_handle.await.unwrap();
 }

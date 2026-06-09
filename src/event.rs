@@ -166,12 +166,26 @@ async fn apply_wraps(wrap_fns: &[Procedure], mut value: Value) -> Result<Value, 
     Ok(value)
 }
 
+struct FlagGuard(Flag);
+
+impl Drop for FlagGuard {
+    fn drop(&mut self) {
+        let _ = self.0.compare_exchange(
+            OpState::Waiting as u8,
+            OpState::Synched as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+}
+
 pub async fn perform_base(event: &BaseEvent) -> Result<Value, Exception> {
     if let Some(value) = (event.try_fn)() {
         return apply_wraps(&event.wrap_fns, value).await;
     }
 
     let flag = new_flag();
+    let _guard = FlagGuard(flag.clone());
     let (tx, rx) = oneshot::channel();
     (event.block_fn)(flag, tx);
     let value = rx
@@ -203,6 +217,7 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
     }
 
     let flag = new_flag();
+    let _guard = FlagGuard(flag.clone());
     let result_slot: Arc<Mutex<Option<(usize, Value)>>> = Arc::new(Mutex::new(None));
     let notify = Arc::new(Notify::new());
     let mut abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();

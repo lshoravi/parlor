@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-scheme-rs = { git = "ssh://git@github.com/lshoravi/scheme-rs.git", branch = "main", features = ["async", "tokio"] }
+scheme-rs = { git = "ssh://git@github.com/lshoravi/scheme-rs.git", branch = "linuss/port-readiness", features = ["async", "tokio"] }
 tokio = { version = "1", features = ["full"] }
 arc-swap = "1"
 imbl = "3"

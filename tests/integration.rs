@@ -1,7 +1,7 @@
 use scheme_rs::runtime::Runtime;
 use scheme_rs::value::Value;
-use parlor::channels::CmlChannel;
-use parlor::producer::{CmlConsumer, CmlProducer};
+use parlor::channels::Channel;
+use parlor::producer::{Consumer, Producer};
 use parlor as _;
 use std::path::PathBuf;
 
@@ -104,10 +104,10 @@ fn test_cml_echo_server() {
 
 #[tokio::test]
 async fn test_producer_consumer_roundtrip() {
-    let ch = CmlChannel::new_buffered(10);
+    let ch = Channel::new_buffered(10);
     let val = Value::from_rust_type(ch);
-    let producer = CmlProducer::from_channel_value(&val).unwrap();
-    let consumer = CmlConsumer::from_channel_value(&val).unwrap();
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let consumer = Consumer::from_channel_value(&val).unwrap();
 
     producer.send(Value::from(42i64)).await.unwrap();
     let result = consumer.recv().await.unwrap();
@@ -116,9 +116,9 @@ async fn test_producer_consumer_roundtrip() {
 
 #[tokio::test]
 async fn test_producer_try_send_full() {
-    let ch = CmlChannel::new_buffered(1);
+    let ch = Channel::new_buffered(1);
     let val = Value::from_rust_type(ch);
-    let producer = CmlProducer::from_channel_value(&val).unwrap();
+    let producer = Producer::from_channel_value(&val).unwrap();
 
     producer.try_send(Value::from(1i64)).unwrap();
     let err = producer.try_send(Value::from(2i64));
@@ -127,10 +127,10 @@ async fn test_producer_try_send_full() {
 
 #[tokio::test]
 async fn test_producer_consumer_multiple() {
-    let ch = CmlChannel::new_buffered(10);
+    let ch = Channel::new_buffered(10);
     let val = Value::from_rust_type(ch);
-    let producer = CmlProducer::from_channel_value(&val).unwrap();
-    let consumer = CmlConsumer::from_channel_value(&val).unwrap();
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let consumer = Consumer::from_channel_value(&val).unwrap();
 
     for i in 0..10i64 {
         producer.send(Value::from(i)).await.unwrap();

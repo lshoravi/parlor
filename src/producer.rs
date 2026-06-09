@@ -3,15 +3,15 @@ use std::sync::Arc;
 use scheme_rs::exceptions::Exception;
 use scheme_rs::value::Value;
 
-use crate::channels::CmlChannel;
+use crate::channels::Channel;
 
-pub struct CmlProducer {
-    channel: CmlChannel,
+pub struct Producer {
+    channel: Channel,
 }
 
-impl CmlProducer {
+impl Producer {
     pub fn from_channel_value(val: &Value) -> Result<Self, Exception> {
-        let ch = val.try_to_rust_type::<CmlChannel>()?;
+        let ch = val.try_to_rust_type::<Channel>()?;
         Ok(Self {
             channel: (*ch).clone(),
         })
@@ -41,13 +41,13 @@ impl CmlProducer {
     }
 }
 
-pub struct CmlConsumer {
-    channel: CmlChannel,
+pub struct Consumer {
+    channel: Channel,
 }
 
-impl CmlConsumer {
+impl Consumer {
     pub fn from_channel_value(val: &Value) -> Result<Self, Exception> {
-        let ch = val.try_to_rust_type::<CmlChannel>()?;
+        let ch = val.try_to_rust_type::<Channel>()?;
         Ok(Self {
             channel: (*ch).clone(),
         })

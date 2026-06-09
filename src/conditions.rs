@@ -30,18 +30,18 @@ impl SchemeCompatible for Condition {
 }
 
 #[derive(Debug, Clone)]
-pub struct CmlNotifier {
+pub struct Notifier {
     pub sem: Arc<Semaphore>,
 }
 
-unsafe impl Trace for CmlNotifier {
+unsafe impl Trace for Notifier {
     unsafe fn visit_children(&self, _visitor: &mut dyn FnMut(OpaqueGcPtr)) {}
     unsafe fn finalize(&mut self) {
         unsafe { std::ptr::drop_in_place(self as *mut Self) }
     }
 }
 
-impl SchemeCompatible for CmlNotifier {
+impl SchemeCompatible for Notifier {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(name: "cml-notifier", opaque: true, sealed: true)
     }
@@ -111,7 +111,7 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
 
 #[bridge(name = "%make-notifier", lib = "(cml conditions bridge)")]
 pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
-    let n = CmlNotifier {
+    let n = Notifier {
         sem: Arc::new(Semaphore::new(0)),
     };
     Ok(vec![Value::from_rust_type(n)])
@@ -119,14 +119,14 @@ pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
 
 #[bridge(name = "%notify!", lib = "(cml conditions bridge)")]
 pub async fn notify(n_val: &Value) -> Result<Vec<Value>, Exception> {
-    let n = n_val.try_to_rust_type::<CmlNotifier>()?;
+    let n = n_val.try_to_rust_type::<Notifier>()?;
     n.sem.add_permits(1);
     Ok(vec![])
 }
 
 #[bridge(name = "%notify-evt", lib = "(cml conditions bridge)")]
 pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
-    let n = n_val.try_to_rust_type::<CmlNotifier>()?;
+    let n = n_val.try_to_rust_type::<Notifier>()?;
     let sem = n.sem.clone();
 
     let sem_try = sem.clone();

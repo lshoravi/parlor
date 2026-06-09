@@ -66,11 +66,11 @@ impl ChannelInner {
 }
 
 #[derive(Clone)]
-pub struct CmlChannel {
+pub struct Channel {
     pub inner: Arc<ChannelInner>,
 }
 
-impl CmlChannel {
+impl Channel {
     pub fn new_rendezvous() -> Self {
         Self {
             inner: Arc::new(ChannelInner {
@@ -98,15 +98,15 @@ impl CmlChannel {
     }
 }
 
-impl std::fmt::Debug for CmlChannel {
+impl std::fmt::Debug for Channel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CmlChannel")
+        f.debug_struct("Channel")
             .field("capacity", &self.inner.capacity)
             .finish_non_exhaustive()
     }
 }
 
-unsafe impl Trace for CmlChannel {
+unsafe impl Trace for Channel {
     unsafe fn visit_children(&self, _visitor: &mut dyn FnMut(OpaqueGcPtr)) {}
 
     unsafe fn finalize(&mut self) {
@@ -114,7 +114,7 @@ unsafe impl Trace for CmlChannel {
     }
 }
 
-impl SchemeCompatible for CmlChannel {
+impl SchemeCompatible for Channel {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(
             name: "cml-channel",
@@ -124,7 +124,7 @@ impl SchemeCompatible for CmlChannel {
     }
 }
 
-pub fn recv_event(channel: CmlChannel) -> BaseEvent {
+pub fn recv_event(channel: Channel) -> BaseEvent {
     let ch = channel.clone();
     let try_fn: TryFn = Arc::new(move || {
         if let Some(ref buf) = ch.inner.buffer {
@@ -250,7 +250,7 @@ pub fn recv_event(channel: CmlChannel) -> BaseEvent {
     }
 }
 
-pub fn send_event(channel: CmlChannel, msg: Value) -> BaseEvent {
+pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     let ch = channel.clone();
     let msg_clone = msg.clone();
     let try_fn: TryFn = Arc::new(move || {
@@ -354,7 +354,7 @@ pub fn send_event(channel: CmlChannel, msg: Value) -> BaseEvent {
 
 #[bridge(name = "%make-rendezvous-channel", lib = "(cml channels bridge)")]
 pub async fn make_rendezvous_channel() -> Result<Vec<Value>, Exception> {
-    Ok(vec![Value::from_rust_type(CmlChannel::new_rendezvous())])
+    Ok(vec![Value::from_rust_type(Channel::new_rendezvous())])
 }
 
 #[bridge(name = "%make-buffered-channel", lib = "(cml channels bridge)")]
@@ -362,21 +362,21 @@ pub async fn make_buffered_channel(capacity: usize) -> Result<Vec<Value>, Except
     if capacity == 0 {
         return Err(Exception::error("buffered channel capacity must be > 0"));
     }
-    Ok(vec![Value::from_rust_type(CmlChannel::new_buffered(
+    Ok(vec![Value::from_rust_type(Channel::new_buffered(
         capacity,
     ))])
 }
 
 #[bridge(name = "%send-evt", lib = "(cml channels bridge)")]
 pub async fn send_evt_bridge(ch_val: &Value, msg: &Value) -> Result<Vec<Value>, Exception> {
-    let channel = ch_val.try_to_rust_type::<CmlChannel>()?;
+    let channel = ch_val.try_to_rust_type::<Channel>()?;
     let event = send_event((*channel).clone(), msg.clone());
     Ok(vec![Value::from_rust_type(event)])
 }
 
 #[bridge(name = "%recv-evt", lib = "(cml channels bridge)")]
 pub async fn recv_evt_bridge(ch_val: &Value) -> Result<Vec<Value>, Exception> {
-    let channel = ch_val.try_to_rust_type::<CmlChannel>()?;
+    let channel = ch_val.try_to_rust_type::<Channel>()?;
     let event = recv_event((*channel).clone());
     Ok(vec![Value::from_rust_type(event)])
 }

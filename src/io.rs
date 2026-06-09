@@ -16,6 +16,18 @@ fn accept_result(socket: tokio::net::TcpStream, addr: std::net::SocketAddr) -> V
     Value::from(Pair::immutable(port, addr_val))
 }
 
+fn make_abort_cancel() -> (Arc<std::sync::Mutex<Option<AbortHandle>>>, CancelFn) {
+    let slot: Arc<std::sync::Mutex<Option<AbortHandle>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let slot_for_cancel = slot.clone();
+    let cancel_fn: CancelFn = Arc::new(move || {
+        if let Some(h) = slot_for_cancel.lock().unwrap().take() {
+            h.abort();
+        }
+    });
+    (slot, cancel_fn)
+}
+
 #[bridge(name = "%accept-evt", lib = "(cml io bridge)")]
 pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Exception> {
     let listener = listener_val.try_to_rust_type::<Arc<TcpListener>>()?;
@@ -23,10 +35,7 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
 
     let try_fn: TryFn = Arc::new(|| None);
 
-    let abort_slot: Arc<std::sync::Mutex<Option<AbortHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
-
-    let slot_for_block = abort_slot.clone();
+    let (abort_slot, cancel_fn) = make_abort_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let listener = listener.clone();
         let handle = tokio::spawn(async move {
@@ -36,22 +45,80 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
                 }
             }
         });
-        *slot_for_block.lock().unwrap() = Some(handle.abort_handle());
+        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
     });
 
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(h) = abort_slot.lock().unwrap().take() {
-            h.abort();
-        }
-    });
-
-    let event = BaseEvent {
+    Ok(vec![Value::from_rust_type(BaseEvent {
         try_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
-    };
-    Ok(vec![Value::from_rust_type(event)])
+    })])
+}
+
+#[cfg(unix)]
+fn make_readiness_block_fn(
+    fd: std::os::unix::io::RawFd,
+    interest: tokio::io::Interest,
+    result_val: Value,
+) -> (BlockFn, CancelFn) {
+    use std::os::unix::io::AsRawFd;
+
+    struct BorrowedFd(std::os::unix::io::RawFd);
+    impl AsRawFd for BorrowedFd {
+        fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
+            self.0
+        }
+    }
+
+    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        let val = result_val.clone();
+        let handle = tokio::spawn(async move {
+            let Ok(async_fd) = tokio::io::unix::AsyncFd::new(BorrowedFd(fd)) else {
+                return;
+            };
+            let _ = async_fd.ready(interest).await;
+            if cas(&flag, OpState::Waiting, OpState::Synched) {
+                let _ = tx.send(val);
+            }
+        });
+        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+    });
+
+    (block_fn, cancel_fn)
+}
+
+#[cfg(not(unix))]
+fn make_readiness_block_fn(
+    port: Port,
+    readable: bool,
+    result_val: Value,
+) -> (BlockFn, CancelFn) {
+    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        let port = port.clone();
+        let val = result_val.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let ready = if readable {
+                    port.poll_read_ready()
+                } else {
+                    port.poll_write_ready()
+                };
+                if ready {
+                    if cas(&flag, OpState::Waiting, OpState::Synched) {
+                        let _ = tx.send(val);
+                    }
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        });
+        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+    });
+
+    (block_fn, cancel_fn)
 }
 
 #[bridge(name = "%readable-evt", lib = "(cml io bridge)")]
@@ -70,42 +137,24 @@ pub async fn readable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
         }
     });
 
-    let abort_slot: Arc<std::sync::Mutex<Option<AbortHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    #[cfg(unix)]
+    let (block_fn, cancel_fn) = {
+        let fd = port.raw_fd().ok_or_else(|| {
+            Exception::error("readable-evt: port has no file descriptor")
+        })?;
+        make_readiness_block_fn(fd, tokio::io::Interest::READABLE, port_val.clone())
+    };
 
-    let wait_val = port_val.clone();
-    let slot_for_block = abort_slot.clone();
-    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
-        let port = port.clone();
-        let val = wait_val.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                tokio::task::yield_now().await;
-                if port.poll_read_ready() {
-                    if cas(&flag, OpState::Waiting, OpState::Synched) {
-                        let _ = tx.send(val);
-                    }
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        });
-        *slot_for_block.lock().unwrap() = Some(handle.abort_handle());
-    });
+    #[cfg(not(unix))]
+    let (block_fn, cancel_fn) =
+        make_readiness_block_fn(port, true, port_val.clone());
 
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(h) = abort_slot.lock().unwrap().take() {
-            h.abort();
-        }
-    });
-
-    let event = BaseEvent {
+    Ok(vec![Value::from_rust_type(BaseEvent {
         try_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
-    };
-    Ok(vec![Value::from_rust_type(event)])
+    })])
 }
 
 #[bridge(name = "%writable-evt", lib = "(cml io bridge)")]
@@ -124,40 +173,22 @@ pub async fn writable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
         }
     });
 
-    let abort_slot: Arc<std::sync::Mutex<Option<AbortHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    #[cfg(unix)]
+    let (block_fn, cancel_fn) = {
+        let fd = port.raw_fd().ok_or_else(|| {
+            Exception::error("writable-evt: port has no file descriptor")
+        })?;
+        make_readiness_block_fn(fd, tokio::io::Interest::WRITABLE, port_val.clone())
+    };
 
-    let wait_val = port_val.clone();
-    let slot_for_block = abort_slot.clone();
-    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
-        let port = port.clone();
-        let val = wait_val.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                tokio::task::yield_now().await;
-                if port.poll_write_ready() {
-                    if cas(&flag, OpState::Waiting, OpState::Synched) {
-                        let _ = tx.send(val);
-                    }
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        });
-        *slot_for_block.lock().unwrap() = Some(handle.abort_handle());
-    });
+    #[cfg(not(unix))]
+    let (block_fn, cancel_fn) =
+        make_readiness_block_fn(port, false, port_val.clone());
 
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(h) = abort_slot.lock().unwrap().take() {
-            h.abort();
-        }
-    });
-
-    let event = BaseEvent {
+    Ok(vec![Value::from_rust_type(BaseEvent {
         try_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
-    };
-    Ok(vec![Value::from_rust_type(event)])
+    })])
 }

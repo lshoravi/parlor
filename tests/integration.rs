@@ -407,7 +407,7 @@ async fn test_buffered_try_send_at_capacity() {
 #[tokio::test]
 async fn test_tcp_readable_writable_readiness() {
     use std::sync::Arc;
-    use parlor::event::{BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel, perform_base};
+    use parlor::event::{BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel, perform_base};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -434,8 +434,9 @@ async fn test_tcp_readable_writable_readiness() {
                 });
                 *abort_slot.lock().unwrap() = Some(handle.abort_handle());
             });
-            let try_fn: TryFn = Arc::new(|| None);
-            let evt = BaseEvent { try_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
+            let poll_fn: PollFn = Arc::new(|| false);
+            let do_fn: DoFn = Arc::new(|| None);
+            let evt = BaseEvent { poll_fn, do_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
             let result = tokio::time::timeout(Duration::from_millis(500), perform_base(&evt))
                 .await.expect("writable-evt timed out").unwrap();
             assert_eq!(result, Value::from(true));
@@ -461,8 +462,9 @@ async fn test_tcp_readable_writable_readiness() {
                 });
                 *abort_slot.lock().unwrap() = Some(handle.abort_handle());
             });
-            let try_fn: TryFn = Arc::new(|| None);
-            let evt = BaseEvent { try_fn, block_fn, cancel_fn: cancel_fn.clone(), wrap_fns: Vec::new() };
+            let poll_fn: PollFn = Arc::new(|| false);
+            let do_fn: DoFn = Arc::new(|| None);
+            let evt = BaseEvent { poll_fn, do_fn, block_fn, cancel_fn: cancel_fn.clone(), wrap_fns: Vec::new() };
             let result = tokio::time::timeout(Duration::from_millis(100), perform_base(&evt)).await;
             assert!(result.is_err(), "readable-evt should timeout with no data");
             cancel_fn();
@@ -493,8 +495,9 @@ async fn test_tcp_readable_writable_readiness() {
                 });
                 *abort_slot.lock().unwrap() = Some(handle.abort_handle());
             });
-            let try_fn: TryFn = Arc::new(|| None);
-            let evt = BaseEvent { try_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
+            let poll_fn: PollFn = Arc::new(|| false);
+            let do_fn: DoFn = Arc::new(|| None);
+            let evt = BaseEvent { poll_fn, do_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
             let result = tokio::time::timeout(Duration::from_millis(500), perform_base(&evt))
                 .await.expect("readable-evt timed out after data sent").unwrap();
             assert_eq!(result, Value::from(true));
@@ -528,4 +531,9 @@ fn test_cml_send_timeout() {
 #[test]
 fn test_cml_always_never() {
     run_scheme_test("cml_always_never.scm");
+}
+
+#[test]
+fn test_cml_poll_do_split() {
+    run_scheme_test("cml_poll_do_split.scm");
 }

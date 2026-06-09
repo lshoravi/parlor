@@ -44,7 +44,8 @@ pub fn flag_state(flag: &Flag) -> OpState {
     }
 }
 
-pub type TryFn = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
+pub type PollFn = Arc<dyn Fn() -> bool + Send + Sync>;
+pub type DoFn = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
 pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) + Send + Sync>;
 pub type CancelFn = Arc<dyn Fn() + Send + Sync>;
 
@@ -77,7 +78,8 @@ pub fn make_flag_cancel() -> (Arc<std::sync::Mutex<Option<Flag>>>, CancelFn) {
 }
 
 pub struct BaseEvent {
-    pub try_fn: TryFn,
+    pub poll_fn: PollFn,
+    pub do_fn: DoFn,
     pub block_fn: BlockFn,
     pub cancel_fn: CancelFn,
     pub wrap_fns: Vec<Procedure>,
@@ -100,7 +102,8 @@ unsafe impl Trace for BaseEvent {
 
     unsafe fn finalize(&mut self) {
         unsafe {
-            std::ptr::drop_in_place(&mut self.try_fn);
+            std::ptr::drop_in_place(&mut self.poll_fn);
+            std::ptr::drop_in_place(&mut self.do_fn);
             std::ptr::drop_in_place(&mut self.block_fn);
             std::ptr::drop_in_place(&mut self.cancel_fn);
             // SAFETY: GC calls visit_children (decrementing Gc refcounts) before
@@ -180,8 +183,10 @@ impl Drop for FlagGuard {
 }
 
 pub async fn perform_base(event: &BaseEvent) -> Result<Value, Exception> {
-    if let Some(value) = (event.try_fn)() {
-        return apply_wraps(&event.wrap_fns, value).await;
+    if (event.poll_fn)() {
+        if let Some(value) = (event.do_fn)() {
+            return apply_wraps(&event.wrap_fns, value).await;
+        }
     }
 
     let flag = new_flag();
@@ -208,10 +213,15 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
         return perform_base(&alts[0]).await;
     }
 
-    let mut indices: Vec<usize> = (0..alts.len()).collect();
-    indices.shuffle(&mut rand::rng());
-    for &i in &indices {
-        if let Some(value) = (alts[i].try_fn)() {
+    let mut enabled: Vec<usize> = alts
+        .iter()
+        .enumerate()
+        .filter(|(_, alt)| (alt.poll_fn)())
+        .map(|(i, _)| i)
+        .collect();
+    enabled.shuffle(&mut rand::rng());
+    for &i in &enabled {
+        if let Some(value) = (alts[i].do_fn)() {
             return apply_wraps(&alts[i].wrap_fns, value).await;
         }
     }
@@ -278,7 +288,8 @@ pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Va
         let mut wraps = event.wrap_fns.clone();
         wraps.push(transform);
         let wrapped = BaseEvent {
-            try_fn: event.try_fn.clone(),
+            poll_fn: event.poll_fn.clone(),
+            do_fn: event.do_fn.clone(),
             block_fn: event.block_fn.clone(),
             cancel_fn: event.cancel_fn.clone(),
             wrap_fns: wraps,
@@ -292,7 +303,8 @@ pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Va
             let mut wraps = base.wrap_fns.clone();
             wraps.push(transform.clone());
             let wrapped = BaseEvent {
-                try_fn: base.try_fn.clone(),
+                poll_fn: base.poll_fn.clone(),
+                do_fn: base.do_fn.clone(),
                 block_fn: base.block_fn.clone(),
                 cancel_fn: base.cancel_fn.clone(),
                 wrap_fns: wraps,
@@ -337,11 +349,13 @@ fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
     let mut indices: Vec<usize> = (0..alts.len()).collect();
     indices.shuffle(&mut rand::rng());
     for &i in &indices {
-        if let Some(value) = (alts[i].try_fn)() {
-            if cas(&flag, OpState::Waiting, OpState::Synched) {
-                let _ = tx.send(value);
+        if (alts[i].poll_fn)() {
+            if let Some(value) = (alts[i].do_fn)() {
+                if cas(&flag, OpState::Waiting, OpState::Synched) {
+                    let _ = tx.send(value);
+                }
+                return;
             }
-            return;
         }
     }
 
@@ -377,7 +391,8 @@ fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
 
 #[bridge(name = "%guard-evt", lib = "(cml bridge)")]
 pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
-    let try_fn: TryFn = Arc::new(|| None);
+    let poll_fn: PollFn = Arc::new(|| false);
+    let do_fn: DoFn = Arc::new(|| None);
 
     let (abort_slot, cancel_fn) = make_abort_cancel();
     let thunk_clone = thunk.clone();
@@ -391,13 +406,15 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
                     None => return,
                 };
                 if let Ok(inner) = evt_val.try_to_rust_type::<BaseEvent>() {
-                    if let Some(value) = (inner.try_fn)() {
-                        if cas(&flag, OpState::Waiting, OpState::Synched) {
-                            let _ = tx.send(value);
+                    if (inner.poll_fn)() {
+                        if let Some(value) = (inner.do_fn)() {
+                            if cas(&flag, OpState::Waiting, OpState::Synched) {
+                                let _ = tx.send(value);
+                            }
+                            return;
                         }
-                    } else {
-                        (inner.block_fn)(flag, tx);
                     }
+                    (inner.block_fn)(flag, tx);
                 } else if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
                     guard_sync_choice(&choice, flag, tx);
                 }
@@ -407,7 +424,8 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
     });
 
     let event = BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -417,8 +435,10 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
 
 #[bridge(name = "%always-evt", lib = "(cml bridge)")]
 pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
+    let poll_fn: PollFn = Arc::new(|| true);
+
     let v = val.clone();
-    let try_fn: TryFn = Arc::new(move || Some(v.clone()));
+    let do_fn: DoFn = Arc::new(move || Some(v.clone()));
 
     let v = val.clone();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
@@ -430,7 +450,8 @@ pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
     let cancel_fn: CancelFn = Arc::new(|| {});
 
     Ok(vec![Value::from_rust_type(BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -439,12 +460,14 @@ pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
 
 #[bridge(name = "%never-evt", lib = "(cml bridge)")]
 pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
-    let try_fn: TryFn = Arc::new(|| None);
+    let poll_fn: PollFn = Arc::new(|| false);
+    let do_fn: DoFn = Arc::new(|| None);
     let block_fn: BlockFn = Arc::new(|_flag: Flag, _tx: ResumeTx| {});
     let cancel_fn: CancelFn = Arc::new(|| {});
 
     Ok(vec![Value::from_rust_type(BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),

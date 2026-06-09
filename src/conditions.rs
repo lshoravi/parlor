@@ -8,7 +8,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::event::{BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel};
+use crate::event::{BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel};
 
 #[derive(Debug, Clone)]
 pub struct Condition {
@@ -72,9 +72,14 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     let signalled = cv.signalled.clone();
     let notify = cv.notify.clone();
 
-    let signalled_try = signalled.clone();
-    let try_fn: TryFn = Arc::new(move || {
-        if signalled_try.load(Ordering::Acquire) {
+    let signalled_poll = signalled.clone();
+    let poll_fn: PollFn = Arc::new(move || {
+        signalled_poll.load(Ordering::Acquire)
+    });
+
+    let signalled_do = signalled.clone();
+    let do_fn: DoFn = Arc::new(move || {
+        if signalled_do.load(Ordering::Acquire) {
             Some(Value::from(true))
         } else {
             None
@@ -101,7 +106,8 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     });
 
     let event = BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -129,8 +135,13 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<Notifier>()?;
     let sem = n.sem.clone();
 
-    let sem_try = sem.clone();
-    let try_fn: TryFn = Arc::new(move || match sem_try.try_acquire() {
+    let sem_poll = sem.clone();
+    let poll_fn: PollFn = Arc::new(move || {
+        sem_poll.available_permits() > 0
+    });
+
+    let sem_do = sem.clone();
+    let do_fn: DoFn = Arc::new(move || match sem_do.try_acquire() {
         Ok(permit) => {
             permit.forget();
             Some(Value::from(true))
@@ -156,7 +167,8 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     });
 
     let event = BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),

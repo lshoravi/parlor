@@ -1,0 +1,20 @@
+(import (rnrs) (cml) (cml channels) (cml timers))
+
+(let loop ((i 0) (saw-1 #f) (saw-2 #f))
+  (if (and saw-1 saw-2)
+      (display "fairness passed\n")
+      (if (> i 200)
+          (error #f "fairness failed: didn't see both values in 200 tries")
+          (let ((v (sync (choose (always-evt 1) (always-evt 2)))))
+            (loop (+ i 1) (or saw-1 (= v 1)) (or saw-2 (= v 2)))))))
+
+(let* ((ch (make-channel 5))
+       (se (send-evt ch 42))
+       (re (recv-evt ch)))
+  (sync se)
+  (sync se)
+  (assert (= (sync re) 42))
+  (assert (= (sync re) 42))
+  (display "event-reuse passed\n"))
+
+(display "all poll-do-split tests passed\n")

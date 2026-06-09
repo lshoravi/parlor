@@ -5,10 +5,12 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::task::AbortHandle;
 
-use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas};
+use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
 fn make_timer_event(duration: std::time::Duration) -> BaseEvent {
-    let try_fn: TryFn = if duration.is_zero() {
+    let is_zero = duration.is_zero();
+    let poll_fn: PollFn = Arc::new(move || is_zero);
+    let do_fn: DoFn = if duration.is_zero() {
         Arc::new(|| Some(Value::from(false)))
     } else {
         Arc::new(|| None)
@@ -35,7 +37,8 @@ fn make_timer_event(duration: std::time::Duration) -> BaseEvent {
     });
 
     BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),

@@ -7,7 +7,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::strings::WideString;
 use scheme_rs::value::Value;
 use tokio::net::{TcpListener, TcpStream};
-use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel};
+use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel};
 
 fn accept_result(socket: TcpStream, addr: std::net::SocketAddr) -> Value {
     let port = Value::from(Port::new(addr.to_string(), socket, BufferMode::Block, None));
@@ -45,7 +45,8 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
     let listener = listener_val.try_to_rust_type::<Arc<TcpListener>>()?;
     let listener = (*listener).clone();
 
-    let try_fn: TryFn = Arc::new(|| None);
+    let poll_fn: PollFn = Arc::new(|| false);
+    let do_fn: DoFn = Arc::new(|| None);
 
     let (abort_slot, cancel_fn) = make_abort_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
@@ -61,7 +62,8 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
     });
 
     Ok(vec![Value::from_rust_type(BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -76,9 +78,15 @@ pub async fn readable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
     let result_val = port_val.clone();
 
     let poll_port = port.clone();
-    let try_fn: TryFn = Arc::new(move || {
-        if poll_port.poll_read_ready() {
-            Some(result_val.clone())
+    let poll_fn: PollFn = Arc::new(move || {
+        poll_port.poll_read_ready()
+    });
+
+    let result_for_do = result_val.clone();
+    let do_port = port.clone();
+    let do_fn: DoFn = Arc::new(move || {
+        if do_port.poll_read_ready() {
+            Some(result_for_do.clone())
         } else {
             None
         }
@@ -97,7 +105,8 @@ pub async fn readable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
         make_poll_block_fn(port, true, port_val.clone());
 
     Ok(vec![Value::from_rust_type(BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -112,9 +121,15 @@ pub async fn writable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
     let result_val = port_val.clone();
 
     let poll_port = port.clone();
-    let try_fn: TryFn = Arc::new(move || {
-        if poll_port.poll_write_ready() {
-            Some(result_val.clone())
+    let poll_fn: PollFn = Arc::new(move || {
+        poll_port.poll_write_ready()
+    });
+
+    let result_for_do = result_val.clone();
+    let do_port = port.clone();
+    let do_fn: DoFn = Arc::new(move || {
+        if do_port.poll_write_ready() {
+            Some(result_for_do.clone())
         } else {
             None
         }
@@ -133,7 +148,8 @@ pub async fn writable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
         make_poll_block_fn(port, false, port_val.clone());
 
     Ok(vec![Value::from_rust_type(BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),

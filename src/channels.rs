@@ -10,7 +10,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 
 use crate::event::{
-    BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, flag_state, make_flag_cancel,
+    BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, flag_state, make_flag_cancel,
 };
 
 struct SendWaiter {
@@ -135,7 +135,23 @@ impl SchemeCompatible for Channel {
 
 pub fn recv_event(channel: Channel) -> BaseEvent {
     let ch = channel.clone();
-    let try_fn: TryFn = Arc::new(move || {
+    let poll_fn: PollFn = Arc::new(move || {
+        if let Some(ref buf) = ch.inner.buffer {
+            if !buf.load().is_empty() {
+                return true;
+            }
+        }
+        let putq = ch.inner.putq.load();
+        for sender in putq.iter() {
+            if flag_state(&sender.flag) == OpState::Waiting {
+                return true;
+            }
+        }
+        false
+    });
+
+    let ch = channel.clone();
+    let do_fn: DoFn = Arc::new(move || {
         if let Some(ref buf) = ch.inner.buffer {
             let popped: Arc<std::sync::Mutex<Option<Value>>> =
                 Arc::new(std::sync::Mutex::new(None));
@@ -252,7 +268,8 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
     });
 
     BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
@@ -261,8 +278,24 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
 
 pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     let ch = channel.clone();
+    let poll_fn: PollFn = Arc::new(move || {
+        let getq = ch.inner.getq.load();
+        for receiver in getq.iter() {
+            if flag_state(&receiver.flag) == OpState::Waiting {
+                return true;
+            }
+        }
+        if let (Some(buf), Some(cap)) = (&ch.inner.buffer, ch.inner.capacity) {
+            if buf.load().len() < cap {
+                return true;
+            }
+        }
+        false
+    });
+
+    let ch = channel.clone();
     let msg_clone = msg.clone();
-    let try_fn: TryFn = Arc::new(move || {
+    let do_fn: DoFn = Arc::new(move || {
         let getq = ch.inner.getq.load();
         for receiver in getq.iter() {
             if cas(&receiver.flag, OpState::Waiting, OpState::Synched) {
@@ -354,7 +387,8 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     });
 
     BaseEvent {
-        try_fn,
+        poll_fn,
+        do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),

@@ -414,3 +414,39 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
     };
     Ok(vec![Value::from_rust_type(event)])
 }
+
+#[bridge(name = "%always-evt", lib = "(cml bridge)")]
+pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
+    let v = val.clone();
+    let try_fn: TryFn = Arc::new(move || Some(v.clone()));
+
+    let v = val.clone();
+    let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        if cas(&flag, OpState::Waiting, OpState::Synched) {
+            let _ = tx.send(v.clone());
+        }
+    });
+
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    Ok(vec![Value::from_rust_type(BaseEvent {
+        try_fn,
+        block_fn,
+        cancel_fn,
+        wrap_fns: Vec::new(),
+    })])
+}
+
+#[bridge(name = "%never-evt", lib = "(cml bridge)")]
+pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
+    let try_fn: TryFn = Arc::new(|| None);
+    let block_fn: BlockFn = Arc::new(|_flag: Flag, _tx: ResumeTx| {});
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    Ok(vec![Value::from_rust_type(BaseEvent {
+        try_fn,
+        block_fn,
+        cancel_fn,
+        wrap_fns: Vec::new(),
+    })])
+}

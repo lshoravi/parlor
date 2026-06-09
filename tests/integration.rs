@@ -524,3 +524,8 @@ async fn test_rust_buffered_channel_capacity_zero() {
 fn test_cml_send_timeout() {
     run_scheme_test("cml_send_timeout.scm");
 }
+
+#[test]
+fn test_cml_always_never() {
+    run_scheme_test("cml_always_never.scm");
+}

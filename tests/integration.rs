@@ -1,8 +1,8 @@
 use scheme_rs::runtime::Runtime;
 use scheme_rs::value::Value;
-use scheme_rs_cml::channels::CmlChannel;
-use scheme_rs_cml::producer::{CmlConsumer, CmlProducer};
-use scheme_rs_cml as _;
+use parlor::channels::CmlChannel;
+use parlor::producer::{CmlConsumer, CmlProducer};
+use parlor as _;
 use std::path::PathBuf;
 
 fn run_scheme_test(filename: &str) {

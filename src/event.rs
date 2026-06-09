@@ -300,9 +300,34 @@ fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
         }
     }
 
-    if let Some(first) = alts.first() {
-        (first.block_fn)(flag, tx);
+    // Block path: use the same Notify+slot pattern as perform_choice.
+    let result_slot: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+    let notify = Arc::new(Notify::new());
+
+    for alt in &alts {
+        let (alt_tx, alt_rx) = oneshot::channel::<Value>();
+        let slot = result_slot.clone();
+        let notify_clone = notify.clone();
+        tokio::spawn(async move {
+            if let Ok(value) = alt_rx.await {
+                let mut guard = slot.lock().await;
+                if guard.is_none() {
+                    *guard = Some(value);
+                }
+                notify_clone.notify_one();
+            }
+        });
+        (alt.block_fn)(flag.clone(), alt_tx);
     }
+
+    let notify_final = notify;
+    let slot_final = result_slot;
+    tokio::spawn(async move {
+        notify_final.notified().await;
+        if let Some(value) = slot_final.lock().await.take() {
+            let _ = tx.send(value);
+        }
+    });
 }
 
 #[bridge(name = "%guard-evt", lib = "(cml bridge)")]

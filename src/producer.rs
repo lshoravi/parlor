@@ -23,12 +23,20 @@ impl Producer {
             let guard = buf.load();
             if guard.len() < cap {
                 let val_for_buf = val;
-                buf.rcu(move |b| {
-                    let mut b = (**b).clone();
-                    b.push_back(val_for_buf.clone());
-                    Arc::new(b)
+                let sent = std::sync::atomic::AtomicBool::new(false);
+                buf.rcu(|b| {
+                    if b.len() < cap {
+                        let mut b = (**b).clone();
+                        b.push_back(val_for_buf.clone());
+                        sent.store(true, std::sync::atomic::Ordering::Relaxed);
+                        Arc::new(b)
+                    } else {
+                        Arc::clone(b)
+                    }
                 });
-                return Ok(());
+                if sent.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Ok(());
+                }
             }
         }
         Err(Exception::error("channel full or closed"))

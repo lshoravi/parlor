@@ -4,13 +4,18 @@ use parlor::channels::Channel;
 use parlor::producer::{Consumer, Producer};
 use parlor as _;
 use std::path::PathBuf;
+use std::sync::Once;
+
+static INIT_ENV: Once = Once::new();
 
 fn run_scheme_test(filename: &str) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
+    INIT_ENV.call_once(|| {
         let scheme_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scheme");
         unsafe { std::env::set_var("SCHEME_RS_LOAD_PATH", &scheme_dir) };
+    });
 
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
         let runtime = Runtime::new();
         let test_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")

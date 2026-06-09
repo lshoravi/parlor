@@ -37,7 +37,7 @@ pub struct ChannelInner {
 
 impl ChannelInner {
     fn gc_senders(&self) {
-        if self.putq_gc_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+        if self.putq_gc_counter.fetch_add(1, Ordering::Relaxed) % GC_INTERVAL == 0 {
             self.putq.rcu(|q| {
                 let filtered: Vector<Arc<SendWaiter>> = q
                     .iter()
@@ -46,12 +46,11 @@ impl ChannelInner {
                     .collect();
                 Arc::new(filtered)
             });
-            self.putq_gc_counter.store(GC_INTERVAL, Ordering::Relaxed);
         }
     }
 
     fn gc_receivers(&self) {
-        if self.getq_gc_counter.fetch_sub(1, Ordering::Relaxed) == 1 {
+        if self.getq_gc_counter.fetch_add(1, Ordering::Relaxed) % GC_INTERVAL == 0 {
             self.getq.rcu(|q| {
                 let filtered: Vector<Arc<RecvWaiter>> = q
                     .iter()
@@ -60,7 +59,6 @@ impl ChannelInner {
                     .collect();
                 Arc::new(filtered)
             });
-            self.getq_gc_counter.store(GC_INTERVAL, Ordering::Relaxed);
         }
     }
 }
@@ -76,8 +74,8 @@ impl Channel {
             inner: Arc::new(ChannelInner {
                 putq: ArcSwap::from_pointee(Vector::new()),
                 getq: ArcSwap::from_pointee(Vector::new()),
-                putq_gc_counter: AtomicUsize::new(GC_INTERVAL),
-                getq_gc_counter: AtomicUsize::new(GC_INTERVAL),
+                putq_gc_counter: AtomicUsize::new(0),
+                getq_gc_counter: AtomicUsize::new(0),
                 capacity: None,
                 buffer: None,
             }),
@@ -89,8 +87,8 @@ impl Channel {
             inner: Arc::new(ChannelInner {
                 putq: ArcSwap::from_pointee(Vector::new()),
                 getq: ArcSwap::from_pointee(Vector::new()),
-                putq_gc_counter: AtomicUsize::new(GC_INTERVAL),
-                getq_gc_counter: AtomicUsize::new(GC_INTERVAL),
+                putq_gc_counter: AtomicUsize::new(0),
+                getq_gc_counter: AtomicUsize::new(0),
                 capacity: Some(capacity),
                 buffer: Some(ArcSwap::from_pointee(Vector::new())),
             }),

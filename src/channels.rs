@@ -10,7 +10,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 
 use crate::event::{
-    BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, flag_state, make_flag_cancel,
+    BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, flag_state,
 };
 
 struct SendWaiter {
@@ -184,9 +184,8 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
     });
 
     let ch = channel.clone();
-    let (flag_slot, cancel_fn) = make_flag_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
-        *flag_slot.lock().unwrap() = Some(flag.clone());
         let waiter = Arc::new(RecvWaiter {
             flag: flag.clone(),
             tx: std::sync::Mutex::new(Some(tx)),
@@ -224,7 +223,7 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
                     } else {
                         flag.store(OpState::Waiting as u8, Ordering::Release);
                     }
-                    return;
+                    return None;
                 }
         }
 
@@ -235,7 +234,7 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
             }
 
             if !cas(&flag, OpState::Waiting, OpState::Claimed) {
-                return;
+                return None;
             }
 
             match sender.flag.compare_exchange(
@@ -253,7 +252,7 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
                     if let Some(rtx) = waiter.tx.lock().unwrap().take() {
                         let _ = rtx.send(message);
                     }
-                    return;
+                    return None;
                 }
                 Err(v) if v == OpState::Claimed as u8 => {
                     flag.store(OpState::Waiting as u8, Ordering::Release);
@@ -265,6 +264,7 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
                 }
             }
         }
+        None
     });
 
     BaseEvent {
@@ -330,9 +330,8 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     });
 
     let ch = channel.clone();
-    let (flag_slot, cancel_fn) = make_flag_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
-        *flag_slot.lock().unwrap() = Some(flag.clone());
         let waiter = Arc::new(SendWaiter {
             flag: flag.clone(),
             tx: std::sync::Mutex::new(Some(tx)),
@@ -355,7 +354,7 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
             }
 
             if !cas(&flag, OpState::Waiting, OpState::Claimed) {
-                return;
+                return None;
             }
 
             match receiver.flag.compare_exchange(
@@ -372,7 +371,7 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
                     if let Some(stx) = waiter.tx.lock().unwrap().take() {
                         let _ = stx.send(Value::from(false));
                     }
-                    return;
+                    return None;
                 }
                 Err(v) if v == OpState::Claimed as u8 => {
                     flag.store(OpState::Waiting as u8, Ordering::Release);
@@ -384,6 +383,7 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
                 }
             }
         }
+        None
     });
 
     BaseEvent {

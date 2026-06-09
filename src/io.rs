@@ -7,7 +7,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::strings::WideString;
 use scheme_rs::value::Value;
 use tokio::net::{TcpListener, TcpStream};
-use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel};
+use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
 fn accept_result(socket: TcpStream, addr: std::net::SocketAddr) -> Value {
     let port = Value::from(Port::new(addr.to_string(), socket, BufferMode::Block, None));
@@ -48,7 +48,7 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
 
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let listener = listener.clone();
         let handle = tokio::spawn(async move {
@@ -58,7 +58,7 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
                 }
             }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     Ok(vec![Value::from_rust_type(BaseEvent {
@@ -164,7 +164,7 @@ fn make_readiness_block_fn(
     interest: tokio::io::Interest,
     result_val: Value,
 ) -> (BlockFn, CancelFn) {
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let val = result_val.clone();
         let handle = tokio::spawn(async move {
@@ -183,7 +183,7 @@ fn make_readiness_block_fn(
                 let _ = tx.send(val);
             }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     (block_fn, cancel_fn)
@@ -195,7 +195,7 @@ fn make_poll_block_fn(
     readable: bool,
     result_val: Value,
 ) -> (BlockFn, CancelFn) {
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let port = port.clone();
         let val = result_val.clone();
@@ -215,7 +215,7 @@ fn make_poll_block_fn(
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     (block_fn, cancel_fn)

@@ -5,14 +5,14 @@ use scheme_rs::proc::{ContBarrier, Procedure};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 
-use crate::event::{BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel};
+use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
 #[bridge(name = "%make-custom-event", lib = "(cml bridge)")]
 pub async fn make_custom_event(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
 
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let thunk = thunk.clone();
         let handle = tokio::spawn(async move {
@@ -22,7 +22,7 @@ pub async fn make_custom_event(thunk: Procedure) -> Result<Vec<Value>, Exception
                     let _ = tx.send(value);
                 }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     let event = BaseEvent {

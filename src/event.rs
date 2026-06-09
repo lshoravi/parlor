@@ -46,36 +46,9 @@ pub fn flag_state(flag: &Flag) -> OpState {
 
 pub type PollFn = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type DoFn = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
-pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) + Send + Sync>;
+pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) -> Option<tokio::task::AbortHandle> + Send + Sync>;
 pub type CancelFn = Arc<dyn Fn() + Send + Sync>;
 
-pub fn make_abort_cancel() -> (Arc<std::sync::Mutex<Option<tokio::task::AbortHandle>>>, CancelFn) {
-    let slot: Arc<std::sync::Mutex<Option<tokio::task::AbortHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
-    let slot_for_cancel = slot.clone();
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(h) = slot_for_cancel.lock().unwrap().take() {
-            h.abort();
-        }
-    });
-    (slot, cancel_fn)
-}
-
-pub fn make_flag_cancel() -> (Arc<std::sync::Mutex<Option<Flag>>>, CancelFn) {
-    let slot: Arc<std::sync::Mutex<Option<Flag>>> = Arc::new(std::sync::Mutex::new(None));
-    let slot_for_cancel = slot.clone();
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(ref flag) = *slot_for_cancel.lock().unwrap() {
-            let _ = flag.compare_exchange(
-                OpState::Waiting as u8,
-                OpState::Synched as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-        }
-    });
-    (slot, cancel_fn)
-}
 
 pub struct BaseEvent {
     pub poll_fn: PollFn,
@@ -192,10 +165,16 @@ pub async fn perform_base(event: &BaseEvent) -> Result<Value, Exception> {
     let flag = new_flag();
     let _guard = FlagGuard(flag.clone());
     let (tx, rx) = oneshot::channel();
-    (event.block_fn)(flag, tx);
-    let value = rx
-        .await
-        .map_err(|_| Exception::error("operation cancelled"))?;
+    let abort_handle = (event.block_fn)(flag, tx);
+    let value = match rx.await {
+        Ok(v) => v,
+        Err(_) => {
+            if let Some(h) = abort_handle {
+                h.abort();
+            }
+            return Err(Exception::error("operation cancelled"));
+        }
+    };
     apply_wraps(&event.wrap_fns, value).await
 }
 
@@ -230,7 +209,8 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
     let _guard = FlagGuard(flag.clone());
     let result_slot: Arc<Mutex<Option<(usize, Value)>>> = Arc::new(Mutex::new(None));
     let notify = Arc::new(Notify::new());
-    let mut abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+    let mut rx_abort_handles: Vec<tokio::task::AbortHandle> = Vec::new();
+    let mut block_abort_handles: Vec<Option<tokio::task::AbortHandle>> = Vec::new();
 
     for (i, alt) in alts.iter().enumerate() {
         let (tx, rx) = oneshot::channel::<Value>();
@@ -246,9 +226,10 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
                 notify_clone.notify_one();
             }
         });
-        abort_handles.push(handle.abort_handle());
+        rx_abort_handles.push(handle.abort_handle());
 
-        (alt.block_fn)(flag.clone(), tx);
+        let block_handle = (alt.block_fn)(flag.clone(), tx);
+        block_abort_handles.push(block_handle);
     }
 
     notify.notified().await;
@@ -259,10 +240,12 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
         .take()
         .ok_or_else(|| Exception::error("choose: no result after notification"))?;
 
-    for (i, handle) in abort_handles.iter().enumerate() {
+    for (i, rx_handle) in rx_abort_handles.iter().enumerate() {
         if i != winner_index {
-            handle.abort();
-            (alts[i].cancel_fn)();
+            rx_handle.abort();
+            if let Some(h) = block_abort_handles[i].take() {
+                h.abort();
+            }
         }
     }
 
@@ -394,7 +377,7 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
 
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let thunk_clone = thunk.clone();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let thunk = thunk_clone.clone();
@@ -420,7 +403,7 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
                 }
             }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     let event = BaseEvent {
@@ -445,6 +428,7 @@ pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
         if cas(&flag, OpState::Waiting, OpState::Synched) {
             let _ = tx.send(v.clone());
         }
+        None
     });
 
     let cancel_fn: CancelFn = Arc::new(|| {});
@@ -462,7 +446,7 @@ pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
 pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
-    let block_fn: BlockFn = Arc::new(|_flag: Flag, _tx: ResumeTx| {});
+    let block_fn: BlockFn = Arc::new(|_flag: Flag, _tx: ResumeTx| None);
     let cancel_fn: CancelFn = Arc::new(|| {});
 
     Ok(vec![Value::from_rust_type(BaseEvent {

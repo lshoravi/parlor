@@ -8,7 +8,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::event::{BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel};
+use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
 #[derive(Debug, Clone)]
 pub struct Condition {
@@ -86,7 +86,7 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
         }
     });
 
-    let (abort_slot, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let signalled = signalled.clone();
         let notify = notify.clone();
@@ -102,7 +102,7 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
                 let _ = tx.send(Value::from(true));
             }
         });
-        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     let event = BaseEvent {
@@ -149,7 +149,7 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
         Err(_) => None,
     });
 
-    let (abort_slot_n, cancel_fn) = make_abort_cancel();
+    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let sem = sem.clone();
         let handle = tokio::spawn(async move {
@@ -163,7 +163,7 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
                 }
             }
         });
-        *abort_slot_n.lock().unwrap() = Some(handle.abort_handle());
+        Some(handle.abort_handle())
     });
 
     let event = BaseEvent {

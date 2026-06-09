@@ -407,7 +407,7 @@ async fn test_buffered_try_send_at_capacity() {
 #[tokio::test]
 async fn test_tcp_readable_writable_readiness() {
     use std::sync::Arc;
-    use parlor::event::{BaseEvent, BlockFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, make_abort_cancel, perform_base};
+    use parlor::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas, perform_base};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -421,7 +421,7 @@ async fn test_tcp_readable_writable_readiness() {
         {
             use std::os::unix::io::AsRawFd;
             let fd = client.as_raw_fd();
-            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let cancel_fn: CancelFn = Arc::new(|| {});
             let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
                 let handle = tokio::spawn(async move {
                     let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
@@ -432,7 +432,7 @@ async fn test_tcp_readable_writable_readiness() {
                         let _ = tx.send(Value::from(true));
                     }
                 });
-                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+                Some(handle.abort_handle())
             });
             let poll_fn: PollFn = Arc::new(|| false);
             let do_fn: DoFn = Arc::new(|| None);
@@ -449,7 +449,7 @@ async fn test_tcp_readable_writable_readiness() {
         {
             use std::os::unix::io::AsRawFd;
             let fd = server.as_raw_fd();
-            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let cancel_fn: CancelFn = Arc::new(|| {});
             let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
                 let handle = tokio::spawn(async move {
                     let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
@@ -460,14 +460,13 @@ async fn test_tcp_readable_writable_readiness() {
                         let _ = tx.send(Value::from(true));
                     }
                 });
-                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+                Some(handle.abort_handle())
             });
             let poll_fn: PollFn = Arc::new(|| false);
             let do_fn: DoFn = Arc::new(|| None);
-            let evt = BaseEvent { poll_fn, do_fn, block_fn, cancel_fn: cancel_fn.clone(), wrap_fns: Vec::new() };
+            let evt = BaseEvent { poll_fn, do_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
             let result = tokio::time::timeout(Duration::from_millis(100), perform_base(&evt)).await;
             assert!(result.is_err(), "readable-evt should timeout with no data");
-            cancel_fn();
         }
     }
 
@@ -482,7 +481,7 @@ async fn test_tcp_readable_writable_readiness() {
             client.flush().await.unwrap();
 
             let fd = server.as_raw_fd();
-            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let cancel_fn: CancelFn = Arc::new(|| {});
             let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
                 let handle = tokio::spawn(async move {
                     let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
@@ -493,7 +492,7 @@ async fn test_tcp_readable_writable_readiness() {
                         let _ = tx.send(Value::from(true));
                     }
                 });
-                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+                Some(handle.abort_handle())
             });
             let poll_fn: PollFn = Arc::new(|| false);
             let do_fn: DoFn = Arc::new(|| None);

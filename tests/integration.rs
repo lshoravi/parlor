@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Once;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use scheme_rs::runtime::Runtime;
@@ -209,4 +210,317 @@ async fn test_cancelled_send_message_not_delivered() {
     assert_eq!(received, Value::from(42i64), "receiver got ghost message instead of real one");
 
     send_handle.await.unwrap();
+}
+
+// --- Gap #1: guard-evt + choose where all try-paths fail (block path) ---
+
+#[test]
+fn test_cml_guard_block_path() {
+    run_scheme_test("cml_guard_block_path.scm");
+}
+
+// --- Gap #2: Channel protocol contention tests ---
+
+#[tokio::test]
+async fn test_rendezvous_contention_no_lost_messages() {
+    let ch = Channel::new_rendezvous();
+    let val = Value::from_rust_type(ch);
+
+    let total_messages = 100usize;
+    let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let mut recv_handles = Vec::new();
+    for _ in 0..total_messages {
+        let consumer = Consumer::from_channel_value(&val).unwrap();
+        let recv_log = received.clone();
+        recv_handles.push(tokio::spawn(async move {
+            let v = tokio::time::timeout(Duration::from_millis(500), consumer.recv()).await;
+            if let Ok(Ok(v)) = v {
+                recv_log.lock().unwrap().push(v);
+            }
+        }));
+    }
+
+    let mut send_handles = Vec::new();
+    for i in 0..total_messages {
+        let producer = Producer::from_channel_value(&val).unwrap();
+        send_handles.push(tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                producer.send(Value::from(i as i64)),
+            )
+            .await
+            .expect("send timed out")
+            .expect("send failed");
+        }));
+    }
+
+    for h in send_handles {
+        h.await.unwrap();
+    }
+    for h in recv_handles {
+        h.await.unwrap();
+    }
+
+    let got = received.lock().unwrap();
+    assert_eq!(got.len(), total_messages, "lost messages under contention");
+    let expected: Vec<Value> = (0..total_messages as i64).map(Value::from).collect();
+    let mut sorted = got.clone();
+    sorted.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    let mut expected_sorted = expected;
+    expected_sorted.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(sorted, expected_sorted, "messages lost or duplicated under contention");
+}
+
+#[tokio::test]
+async fn test_rendezvous_many_senders_one_receiver() {
+    let ch = Channel::new_rendezvous();
+    let val = Value::from_rust_type(ch);
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+
+    let num_senders = 50;
+    let mut send_handles = Vec::new();
+    for i in 0..num_senders {
+        let producer = Producer::from_channel_value(&val).unwrap();
+        send_handles.push(tokio::spawn(async move {
+            producer.send(Value::from(i as i64)).await.unwrap();
+        }));
+    }
+
+    let mut received = Vec::new();
+    for _ in 0..num_senders {
+        let v = tokio::time::timeout(Duration::from_millis(500), consumer.recv())
+            .await
+            .expect("recv timed out")
+            .unwrap();
+        received.push(v);
+    }
+
+    for h in send_handles {
+        h.await.unwrap();
+    }
+
+    assert_eq!(received.len(), num_senders);
+    let expected: Vec<Value> = (0..num_senders as i64).map(Value::from).collect();
+    let mut sorted = received.clone();
+    sorted.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    let mut expected_sorted = expected;
+    expected_sorted.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(sorted, expected_sorted, "messages lost or duplicated");
+}
+
+#[tokio::test]
+async fn test_gc_after_many_cancelled_operations() {
+    let ch = Channel::new_rendezvous();
+    let val = Value::from_rust_type(ch);
+
+    for _ in 0..80 {
+        let ghost = Consumer::from_channel_value(&val).unwrap();
+        let _ = tokio::time::timeout(Duration::from_millis(1), ghost.recv()).await;
+    }
+
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+
+    let send_handle = tokio::spawn(async move {
+        producer.send(Value::from(999i64)).await.unwrap();
+    });
+
+    let result = tokio::time::timeout(Duration::from_millis(500), consumer.recv())
+        .await
+        .expect("recv timed out after 80 ghost waiters")
+        .unwrap();
+    assert_eq!(result, Value::from(999i64));
+    send_handle.await.unwrap();
+}
+
+// --- Gap #3: timer-operation with absolute timestamps ---
+
+#[test]
+fn test_cml_timer_operation() {
+    run_scheme_test("cml_timer_operation.scm");
+}
+
+// --- Gap #4: Buffered channel at-capacity blocking ---
+
+#[tokio::test]
+async fn test_buffered_at_capacity_blocks_then_drains() {
+    let ch = Channel::new_buffered(2);
+    let val = Value::from_rust_type(ch);
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+
+    producer.send(Value::from(1i64)).await.unwrap();
+    producer.send(Value::from(2i64)).await.unwrap();
+
+    let send_complete = Arc::new(AtomicUsize::new(0));
+    let sc = send_complete.clone();
+    let p2 = Producer::from_channel_value(&val).unwrap();
+    let send_handle = tokio::spawn(async move {
+        p2.send(Value::from(3i64)).await.unwrap();
+        sc.store(1, Ordering::Release);
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        send_complete.load(Ordering::Acquire),
+        0,
+        "third send should be blocked while buffer is full"
+    );
+
+    // Drain all three values. The blocked sender is in putq; a recv will
+    // first pop from the buffer, and eventually find the sender in putq.
+    let v1 = tokio::time::timeout(Duration::from_millis(200), consumer.recv())
+        .await.expect("recv 1 timed out").unwrap();
+    let v2 = tokio::time::timeout(Duration::from_millis(200), consumer.recv())
+        .await.expect("recv 2 timed out").unwrap();
+    let v3 = tokio::time::timeout(Duration::from_millis(200), consumer.recv())
+        .await.expect("recv 3 timed out").unwrap();
+
+    assert_eq!(v1, Value::from(1i64));
+    assert_eq!(v2, Value::from(2i64));
+    assert_eq!(v3, Value::from(3i64));
+
+    send_handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_buffered_try_send_at_capacity() {
+    let ch = Channel::new_buffered(2);
+    let val = Value::from_rust_type(ch);
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let consumer = Consumer::from_channel_value(&val).unwrap();
+
+    producer.try_send(Value::from(1i64)).unwrap();
+    producer.try_send(Value::from(2i64)).unwrap();
+    assert!(producer.try_send(Value::from(3i64)).is_err(), "try_send should fail at capacity");
+
+    let _ = consumer.recv().await.unwrap();
+    producer.try_send(Value::from(3i64)).unwrap();
+}
+
+// --- Gap #5: readable-evt / writable-evt readiness detection ---
+// Note: The Scheme-level readable-evt/writable-evt bridges have a bug where
+// port.raw_fd() uses blocking_lock() inside an async context. These tests
+// exercise the underlying readiness mechanism at the Rust level instead.
+
+#[tokio::test]
+async fn test_tcp_readable_writable_readiness() {
+    use std::sync::Arc;
+    use parlor::event::{BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel, perform_base};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (server, _) = listener.accept().await.unwrap();
+
+    // writable-evt on client: TCP send buffer is empty, should be immediately writable.
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = client.as_raw_fd();
+            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+                let handle = tokio::spawn(async move {
+                    let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+                        .try_clone_to_owned().unwrap();
+                    let async_fd = tokio::io::unix::AsyncFd::new(owned).unwrap();
+                    let _ = async_fd.ready(tokio::io::Interest::WRITABLE).await;
+                    if cas(&flag, OpState::Waiting, OpState::Synched) {
+                        let _ = tx.send(Value::from(true));
+                    }
+                });
+                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+            });
+            let try_fn: TryFn = Arc::new(|| None);
+            let evt = BaseEvent { try_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
+            let result = tokio::time::timeout(Duration::from_millis(500), perform_base(&evt))
+                .await.expect("writable-evt timed out").unwrap();
+            assert_eq!(result, Value::from(true));
+        }
+    }
+
+    // readable-evt on server: no data sent yet, should timeout.
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = server.as_raw_fd();
+            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+                let handle = tokio::spawn(async move {
+                    let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+                        .try_clone_to_owned().unwrap();
+                    let async_fd = tokio::io::unix::AsyncFd::new(owned).unwrap();
+                    let _ = async_fd.ready(tokio::io::Interest::READABLE).await;
+                    if cas(&flag, OpState::Waiting, OpState::Synched) {
+                        let _ = tx.send(Value::from(true));
+                    }
+                });
+                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+            });
+            let try_fn: TryFn = Arc::new(|| None);
+            let evt = BaseEvent { try_fn, block_fn, cancel_fn: cancel_fn.clone(), wrap_fns: Vec::new() };
+            let result = tokio::time::timeout(Duration::from_millis(100), perform_base(&evt)).await;
+            assert!(result.is_err(), "readable-evt should timeout with no data");
+            cancel_fn();
+        }
+    }
+
+    // Send data from client, then readable-evt on server should fire.
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            use tokio::io::AsyncWriteExt;
+            let mut client = client;
+            client.write_all(b"hello").await.unwrap();
+            client.flush().await.unwrap();
+
+            let fd = server.as_raw_fd();
+            let (abort_slot, cancel_fn) = make_abort_cancel();
+            let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+                let handle = tokio::spawn(async move {
+                    let owned = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+                        .try_clone_to_owned().unwrap();
+                    let async_fd = tokio::io::unix::AsyncFd::new(owned).unwrap();
+                    let _ = async_fd.ready(tokio::io::Interest::READABLE).await;
+                    if cas(&flag, OpState::Waiting, OpState::Synched) {
+                        let _ = tx.send(Value::from(true));
+                    }
+                });
+                *abort_slot.lock().unwrap() = Some(handle.abort_handle());
+            });
+            let try_fn: TryFn = Arc::new(|| None);
+            let evt = BaseEvent { try_fn, block_fn, cancel_fn, wrap_fns: Vec::new() };
+            let result = tokio::time::timeout(Duration::from_millis(500), perform_base(&evt))
+                .await.expect("readable-evt timed out after data sent").unwrap();
+            assert_eq!(result, Value::from(true));
+        }
+    }
+}
+
+// --- Gap #6: Negative/error-path tests ---
+
+#[test]
+fn test_cml_error_paths() {
+    run_scheme_test("cml_error_paths.scm");
+}
+
+#[tokio::test]
+async fn test_rust_buffered_channel_capacity_zero() {
+    let ch = Channel::new_buffered(0);
+    let val = Value::from_rust_type(ch);
+    let producer = Producer::from_channel_value(&val).unwrap();
+    let result = producer.try_send(Value::from(1i64));
+    assert!(result.is_err(), "capacity-0 buffered channel should reject sends");
+}
+
+// --- Gap #7: Rendezvous send timeout via choose ---
+
+#[test]
+fn test_cml_send_timeout() {
+    run_scheme_test("cml_send_timeout.scm");
 }

@@ -10,7 +10,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 
 use crate::event::{
-    BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas, flag_state,
+    BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, flag_state, make_flag_cancel,
 };
 
 struct SendWaiter {
@@ -105,7 +105,18 @@ impl std::fmt::Debug for Channel {
 }
 
 unsafe impl Trace for Channel {
-    unsafe fn visit_children(&self, _visitor: &mut dyn FnMut(OpaqueGcPtr)) {}
+    unsafe fn visit_children(&self, visitor: &mut dyn FnMut(OpaqueGcPtr)) {
+        let putq = self.inner.putq.load();
+        for waiter in putq.iter() {
+            unsafe { waiter.message.visit_children(visitor) };
+        }
+        if let Some(ref buf) = self.inner.buffer {
+            let buffer = buf.load();
+            for value in buffer.iter() {
+                unsafe { value.visit_children(visitor) };
+            }
+        }
+    }
 
     unsafe fn finalize(&mut self) {
         unsafe { std::ptr::drop_in_place(self as *mut Self) }
@@ -157,7 +168,9 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
     });
 
     let ch = channel.clone();
+    let (flag_slot, cancel_fn) = make_flag_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        *flag_slot.lock().unwrap() = Some(flag.clone());
         let waiter = Arc::new(RecvWaiter {
             flag: flag.clone(),
             tx: std::sync::Mutex::new(Some(tx)),
@@ -193,7 +206,7 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
                             let _ = rtx.send(value);
                         }
                     } else {
-                        flag.store(OpState::Waiting as u8, Ordering::SeqCst);
+                        flag.store(OpState::Waiting as u8, Ordering::Release);
                     }
                     return;
                 }
@@ -212,11 +225,11 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
             match sender.flag.compare_exchange(
                 OpState::Waiting as u8,
                 OpState::Synched as u8,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    flag.store(OpState::Synched as u8, Ordering::SeqCst);
+                    flag.store(OpState::Synched as u8, Ordering::Release);
                     let message = sender.message.clone();
                     if let Some(stx) = sender.tx.lock().unwrap().take() {
                         let _ = stx.send(Value::from(false));
@@ -227,18 +240,16 @@ pub fn recv_event(channel: Channel) -> BaseEvent {
                     return;
                 }
                 Err(v) if v == OpState::Claimed as u8 => {
-                    flag.store(OpState::Waiting as u8, Ordering::SeqCst);
+                    flag.store(OpState::Waiting as u8, Ordering::Release);
                     continue;
                 }
                 Err(_) => {
-                    flag.store(OpState::Waiting as u8, Ordering::SeqCst);
+                    flag.store(OpState::Waiting as u8, Ordering::Release);
                     continue;
                 }
             }
         }
     });
-
-    let cancel_fn: CancelFn = Arc::new(|| {});
 
     BaseEvent {
         try_fn,
@@ -286,7 +297,9 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     });
 
     let ch = channel.clone();
+    let (flag_slot, cancel_fn) = make_flag_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
+        *flag_slot.lock().unwrap() = Some(flag.clone());
         let waiter = Arc::new(SendWaiter {
             flag: flag.clone(),
             tx: std::sync::Mutex::new(Some(tx)),
@@ -315,11 +328,11 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
             match receiver.flag.compare_exchange(
                 OpState::Waiting as u8,
                 OpState::Synched as u8,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    flag.store(OpState::Synched as u8, Ordering::SeqCst);
+                    flag.store(OpState::Synched as u8, Ordering::Release);
                     if let Some(rtx) = receiver.tx.lock().unwrap().take() {
                         let _ = rtx.send(waiter.message.clone());
                     }
@@ -329,18 +342,16 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
                     return;
                 }
                 Err(v) if v == OpState::Claimed as u8 => {
-                    flag.store(OpState::Waiting as u8, Ordering::SeqCst);
+                    flag.store(OpState::Waiting as u8, Ordering::Release);
                     continue;
                 }
                 Err(_) => {
-                    flag.store(OpState::Waiting as u8, Ordering::SeqCst);
+                    flag.store(OpState::Waiting as u8, Ordering::Release);
                     continue;
                 }
             }
         }
     });
-
-    let cancel_fn: CancelFn = Arc::new(|| {});
 
     BaseEvent {
         try_fn,

@@ -7,9 +7,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::strings::WideString;
 use scheme_rs::value::Value;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::AbortHandle;
-
-use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas};
+use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel};
 
 fn accept_result(socket: TcpStream, addr: std::net::SocketAddr) -> Value {
     let port = Value::from(Port::new(addr.to_string(), socket, BufferMode::Block, None));
@@ -17,17 +15,6 @@ fn accept_result(socket: TcpStream, addr: std::net::SocketAddr) -> Value {
     Value::from(Pair::immutable(port, addr_val))
 }
 
-fn make_abort_cancel() -> (Arc<std::sync::Mutex<Option<AbortHandle>>>, CancelFn) {
-    let slot: Arc<std::sync::Mutex<Option<AbortHandle>>> =
-        Arc::new(std::sync::Mutex::new(None));
-    let slot_for_cancel = slot.clone();
-    let cancel_fn: CancelFn = Arc::new(move || {
-        if let Some(h) = slot_for_cancel.lock().unwrap().take() {
-            h.abort();
-        }
-    });
-    (slot, cancel_fn)
-}
 
 // --- Networking helpers ---
 
@@ -161,20 +148,18 @@ fn make_readiness_block_fn(
     interest: tokio::io::Interest,
     result_val: Value,
 ) -> (BlockFn, CancelFn) {
-    use std::os::unix::io::AsRawFd;
-
-    struct BorrowedFd(std::os::unix::io::RawFd);
-    impl AsRawFd for BorrowedFd {
-        fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
-            self.0
-        }
-    }
-
     let (abort_slot, cancel_fn) = make_abort_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let val = result_val.clone();
         let handle = tokio::spawn(async move {
-            let Ok(async_fd) = tokio::io::unix::AsyncFd::new(BorrowedFd(fd)) else {
+            // dup() the fd so AsyncFd gets its own epoll/kqueue registration
+            // instead of conflicting with the TcpStream's existing one.
+            let Ok(owned) = (unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) })
+                .try_clone_to_owned()
+            else {
+                return;
+            };
+            let Ok(async_fd) = tokio::io::unix::AsyncFd::new(owned) else {
                 return;
             };
             let _ = async_fd.ready(interest).await;

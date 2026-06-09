@@ -8,7 +8,7 @@ use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::event::{BaseEvent, BlockFn, CancelFn, Flag, OpState, ResumeTx, TryFn, cas};
+use crate::event::{BaseEvent, BlockFn, Flag, OpState, ResumeTx, TryFn, cas, make_abort_cancel};
 
 #[derive(Debug, Clone)]
 pub struct Condition {
@@ -59,7 +59,7 @@ pub async fn make_condition() -> Result<Vec<Value>, Exception> {
 #[bridge(name = "%signal!", lib = "(cml conditions bridge)")]
 pub async fn signal(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     let cv = cv_val.try_to_rust_type::<Condition>()?;
-    let was_first = !cv.signalled.swap(true, Ordering::SeqCst);
+    let was_first = !cv.signalled.swap(true, Ordering::AcqRel);
     if was_first {
         cv.notify.notify_waiters();
     }
@@ -74,18 +74,19 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
 
     let signalled_try = signalled.clone();
     let try_fn: TryFn = Arc::new(move || {
-        if signalled_try.load(Ordering::SeqCst) {
+        if signalled_try.load(Ordering::Acquire) {
             Some(Value::from(true))
         } else {
             None
         }
     });
 
+    let (abort_slot, cancel_fn) = make_abort_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let signalled = signalled.clone();
         let notify = notify.clone();
-        tokio::spawn(async move {
-            if signalled.load(Ordering::SeqCst) {
+        let handle = tokio::spawn(async move {
+            if signalled.load(Ordering::Acquire) {
                 if cas(&flag, OpState::Waiting, OpState::Synched) {
                     let _ = tx.send(Value::from(true));
                 }
@@ -96,9 +97,8 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
                 let _ = tx.send(Value::from(true));
             }
         });
+        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
     });
-
-    let cancel_fn: CancelFn = Arc::new(|| {});
 
     let event = BaseEvent {
         try_fn,
@@ -138,9 +138,10 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
         Err(_) => None,
     });
 
+    let (abort_slot_n, cancel_fn) = make_abort_cancel();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let sem = sem.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Ok(permit) = sem.acquire().await {
                 if cas(&flag, OpState::Waiting, OpState::Synched) {
                     permit.forget();
@@ -151,9 +152,8 @@ pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
                 }
             }
         });
+        *abort_slot_n.lock().unwrap() = Some(handle.abort_handle());
     });
-
-    let cancel_fn: CancelFn = Arc::new(|| {});
 
     let event = BaseEvent {
         try_fn,

@@ -29,14 +29,14 @@ pub fn cas(flag: &Flag, expected: OpState, desired: OpState) -> bool {
     flag.compare_exchange(
         expected as u8,
         desired as u8,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
+        Ordering::AcqRel,
+        Ordering::Acquire,
     )
     .is_ok()
 }
 
 pub fn flag_state(flag: &Flag) -> OpState {
-    match flag.load(Ordering::SeqCst) {
+    match flag.load(Ordering::Acquire) {
         0 => OpState::Waiting,
         1 => OpState::Claimed,
         2 => OpState::Synched,
@@ -47,6 +47,34 @@ pub fn flag_state(flag: &Flag) -> OpState {
 pub type TryFn = Arc<dyn Fn() -> Option<Value> + Send + Sync>;
 pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) + Send + Sync>;
 pub type CancelFn = Arc<dyn Fn() + Send + Sync>;
+
+pub fn make_abort_cancel() -> (Arc<std::sync::Mutex<Option<tokio::task::AbortHandle>>>, CancelFn) {
+    let slot: Arc<std::sync::Mutex<Option<tokio::task::AbortHandle>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let slot_for_cancel = slot.clone();
+    let cancel_fn: CancelFn = Arc::new(move || {
+        if let Some(h) = slot_for_cancel.lock().unwrap().take() {
+            h.abort();
+        }
+    });
+    (slot, cancel_fn)
+}
+
+pub fn make_flag_cancel() -> (Arc<std::sync::Mutex<Option<Flag>>>, CancelFn) {
+    let slot: Arc<std::sync::Mutex<Option<Flag>>> = Arc::new(std::sync::Mutex::new(None));
+    let slot_for_cancel = slot.clone();
+    let cancel_fn: CancelFn = Arc::new(move || {
+        if let Some(ref flag) = *slot_for_cancel.lock().unwrap() {
+            let _ = flag.compare_exchange(
+                OpState::Waiting as u8,
+                OpState::Synched as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    });
+    (slot, cancel_fn)
+}
 
 pub struct BaseEvent {
     pub try_fn: TryFn,
@@ -75,8 +103,9 @@ unsafe impl Trace for BaseEvent {
             std::ptr::drop_in_place(&mut self.try_fn);
             std::ptr::drop_in_place(&mut self.block_fn);
             std::ptr::drop_in_place(&mut self.cancel_fn);
-            // Don't drop Gc handles in wrap_fns — the GC's for_each_child →
-            // decrement already handled them. Just free the Vec buffer.
+            // SAFETY: GC calls visit_children (decrementing Gc refcounts) before
+            // finalize — see collection.rs release() and free_cycle(). Clear length
+            // to prevent Drop from double-decrementing, then drop the buffer.
             self.wrap_fns.set_len(0);
             std::ptr::drop_in_place(&mut self.wrap_fns);
         }
@@ -107,8 +136,9 @@ unsafe impl Trace for ChoiceEvent {
 
     unsafe fn finalize(&mut self) {
         unsafe {
-            // Don't drop Gc-backed Values — the GC's for_each_child →
-            // decrement already handled them. Just free the Vec buffer.
+            // SAFETY: GC calls visit_children (decrementing Gc refcounts) before
+            // finalize — see collection.rs release() and free_cycle(). Clear length
+            // to prevent Drop from double-decrementing, then drop the buffer.
             self.alternatives.set_len(0);
             std::ptr::drop_in_place(&mut self.alternatives);
         }
@@ -334,10 +364,11 @@ fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
 pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     let try_fn: TryFn = Arc::new(|| None);
 
+    let (abort_slot, cancel_fn) = make_abort_cancel();
     let thunk_clone = thunk.clone();
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let thunk = thunk_clone.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result = thunk.call(&[], &mut ContBarrier::new()).await;
             if let Ok(results) = result {
                 let evt_val = match results.into_iter().next() {
@@ -357,9 +388,8 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
                 }
             }
         });
+        *abort_slot.lock().unwrap() = Some(handle.abort_handle());
     });
-
-    let cancel_fn: CancelFn = Arc::new(|| {});
 
     let event = BaseEvent {
         try_fn,

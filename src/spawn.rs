@@ -1,55 +1,29 @@
 use std::sync::Arc;
 
+use futures::future::{BoxFuture, Shared};
 use scheme_rs::exceptions::Exception;
-use scheme_rs::gc::{OpaqueGcPtr, Trace};
-use scheme_rs::proc::{ContBarrier, Procedure};
-use scheme_rs::records::{RecordTypeDescriptor, SchemeCompatible, rtd};
 use scheme_rs::registry::bridge;
 use scheme_rs::value::Value;
 use tokio::sync::watch;
 
 use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
-#[derive(Clone)]
-pub struct TaskHandle {
-    rx: watch::Receiver<Option<Value>>,
-}
-
-impl std::fmt::Debug for TaskHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TaskHandle").finish_non_exhaustive()
-    }
-}
-
-unsafe impl Trace for TaskHandle {
-    unsafe fn visit_children(&self, _visitor: &mut dyn FnMut(OpaqueGcPtr)) {}
-    unsafe fn finalize(&mut self) {
-        unsafe { std::ptr::drop_in_place(self as *mut Self) }
-    }
-}
-
-impl SchemeCompatible for TaskHandle {
-    fn rtd() -> Arc<RecordTypeDescriptor> {
-        rtd!(name: "cml-task-handle", opaque: true, sealed: true)
-    }
-}
-
-#[bridge(name = "%cml-spawn", lib = "(cml spawn bridge)")]
-pub async fn cml_spawn(thunk: Procedure) -> Result<Vec<Value>, Exception> {
-    let (tx, rx) = watch::channel(None);
-    tokio::spawn(async move {
-        if let Ok(results) = thunk.call(&[], &mut ContBarrier::new()).await {
-            let value = results.into_iter().next().unwrap_or(Value::from(false));
-            let _ = tx.send(Some(value));
-        }
-    });
-    Ok(vec![Value::from_rust_type(TaskHandle { rx })])
-}
+type Future = Shared<BoxFuture<'static, Result<Vec<Value>, Exception>>>;
 
 #[bridge(name = "%join-evt", lib = "(cml spawn bridge)")]
-pub async fn join_evt_bridge(handle_val: &Value) -> Result<Vec<Value>, Exception> {
-    let handle = handle_val.try_to_rust_type::<TaskHandle>()?;
-    let rx = handle.rx.clone();
+pub async fn join_evt_bridge(future_val: &Value) -> Result<Vec<Value>, Exception> {
+    let future = future_val.try_to_rust_type::<Future>()?;
+    let (watch_tx, watch_rx) = watch::channel(None::<Value>);
+
+    let fut = (*future).clone();
+    tokio::spawn(async move {
+        if let Ok(results) = fut.await {
+            let value = results.into_iter().next().unwrap_or(Value::from(false));
+            let _ = watch_tx.send(Some(value));
+        }
+    });
+
+    let rx = watch_rx;
 
     let rx_poll = rx.clone();
     let poll_fn: PollFn = Arc::new(move || rx_poll.borrow().is_some());

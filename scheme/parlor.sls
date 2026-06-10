@@ -1,5 +1,5 @@
 (library (parlor)
-  (export sync choose wrap guard-evt
+  (export sync select choose wrap guard-evt
           make-custom-event always-evt never-evt with-nack)
   (import (rnrs) (parlor bridge))
 
@@ -10,4 +10,5 @@
   (define (make-custom-event thunk) (%make-custom-event thunk))
   (define (always-evt val) (%always-evt val))
   (define (never-evt) (%never-evt))
-  (define (with-nack thunk) (%with-nack thunk)))
+  (define (with-nack thunk) (%with-nack thunk))
+  (define (select . evts) (sync (apply choose evts))))

@@ -12,6 +12,11 @@ Synchronize on an event. Blocks until the event fires, returns its value.
 
 Combine events into a choice. When synced, at most one alternative fires. Among ready alternatives, the winner is chosen at random. Nested choices flatten.
 
+### select
+`(select evt ...) -> value`
+
+Sugar for `(sync (choose evt ...))`. Synchronize on a choice of events, return the winner's value.
+
 ### wrap
 `(wrap evt proc) -> event`
 

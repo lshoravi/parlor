@@ -536,3 +536,8 @@ fn test_cml_always_never() {
 fn test_cml_poll_do_split() {
     run_scheme_test("cml_poll_do_split.scm");
 }
+
+#[test]
+fn test_cml_with_nack() {
+    run_scheme_test("cml_with_nack.scm");
+}

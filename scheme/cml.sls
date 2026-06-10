@@ -1,6 +1,6 @@
 (library (cml)
   (export sync choose wrap guard-evt
-          make-custom-event always-evt never-evt)
+          make-custom-event always-evt never-evt with-nack)
   (import (rnrs) (cml bridge))
 
   (define (sync evt) (%sync evt))
@@ -9,4 +9,5 @@
   (define (guard-evt thunk) (%guard-evt thunk))
   (define (make-custom-event thunk) (%make-custom-event thunk))
   (define (always-evt val) (%always-evt val))
-  (define (never-evt) (%never-evt)))
+  (define (never-evt) (%never-evt))
+  (define (with-nack thunk) (%with-nack thunk)))

@@ -66,16 +66,12 @@ pub async fn signal(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from(was_first)])
 }
 
-#[bridge(name = "%wait-evt", lib = "(cml conditions bridge)")]
-pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
-    let cv = cv_val.try_to_rust_type::<Condition>()?;
-    let signalled = cv.signalled.clone();
-    let notify = cv.notify.clone();
+pub fn make_wait_event(cond: Condition) -> BaseEvent {
+    let signalled = cond.signalled.clone();
+    let notify = cond.notify.clone();
 
     let signalled_poll = signalled.clone();
-    let poll_fn: PollFn = Arc::new(move || {
-        signalled_poll.load(Ordering::Acquire)
-    });
+    let poll_fn: PollFn = Arc::new(move || signalled_poll.load(Ordering::Acquire));
 
     let signalled_do = signalled.clone();
     let do_fn: DoFn = Arc::new(move || {
@@ -86,7 +82,6 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
         }
     });
 
-    let cancel_fn: CancelFn = Arc::new(|| {});
     let block_fn: BlockFn = Arc::new(move |flag: Flag, tx: ResumeTx| {
         let signalled = signalled.clone();
         let notify = notify.clone();
@@ -105,13 +100,21 @@ pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
         Some(handle.abort_handle())
     });
 
-    let event = BaseEvent {
+    let cancel_fn: CancelFn = Arc::new(|| {});
+
+    BaseEvent {
         poll_fn,
         do_fn,
         block_fn,
         cancel_fn,
         wrap_fns: Vec::new(),
-    };
+    }
+}
+
+#[bridge(name = "%wait-evt", lib = "(cml conditions bridge)")]
+pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
+    let cv = cv_val.try_to_rust_type::<Condition>()?;
+    let event = make_wait_event((*cv).clone());
     Ok(vec![Value::from_rust_type(event)])
 }
 

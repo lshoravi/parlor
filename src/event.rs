@@ -50,6 +50,42 @@ pub type BlockFn = Arc<dyn Fn(Flag, ResumeTx) -> Option<tokio::task::AbortHandle
 pub type CancelFn = Arc<dyn Fn() + Send + Sync>;
 
 
+pub struct WithNackEvent {
+    pub thunk: Procedure,
+    pub wrap_fns: Vec<Procedure>,
+}
+
+impl std::fmt::Debug for WithNackEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WithNackEvent")
+            .field("wrap_fns", &self.wrap_fns.len())
+            .finish_non_exhaustive()
+    }
+}
+
+unsafe impl Trace for WithNackEvent {
+    unsafe fn visit_children(&self, visitor: &mut dyn FnMut(OpaqueGcPtr)) {
+        unsafe { self.thunk.visit_children(visitor) };
+        for wrap in &self.wrap_fns {
+            unsafe { wrap.visit_children(visitor) };
+        }
+    }
+
+    unsafe fn finalize(&mut self) {
+        unsafe {
+            std::ptr::drop_in_place(&mut self.thunk);
+            self.wrap_fns.set_len(0);
+            std::ptr::drop_in_place(&mut self.wrap_fns);
+        }
+    }
+}
+
+impl SchemeCompatible for WithNackEvent {
+    fn rtd() -> Arc<RecordTypeDescriptor> {
+        rtd!(name: "cml-with-nack-event", opaque: true, sealed: true)
+    }
+}
+
 pub struct BaseEvent {
     pub poll_fn: PollFn,
     pub do_fn: DoFn,
@@ -179,16 +215,40 @@ pub async fn perform_base(event: &BaseEvent) -> Result<Value, Exception> {
 }
 
 pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
-    let alts: Vec<Gc<BaseEvent>> = choice
-        .alternatives
-        .iter()
-        .map(|v| v.try_to_rust_type::<BaseEvent>())
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut alts: Vec<Gc<BaseEvent>> = Vec::new();
+    let mut nack_cvars: Vec<Option<crate::conditions::Condition>> = Vec::new();
+    let mut outer_wraps: Vec<Vec<Procedure>> = Vec::new();
+
+    for alt_val in &choice.alternatives {
+        if let Ok(base) = alt_val.try_to_rust_type::<BaseEvent>() {
+            alts.push(base);
+            nack_cvars.push(None);
+            outer_wraps.push(Vec::new());
+        } else if let Ok(wn) = alt_val.try_to_rust_type::<WithNackEvent>() {
+            let nack_cvar = crate::conditions::Condition {
+                notify: Arc::new(Notify::new()),
+                signalled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            };
+            let nack_evt = crate::conditions::make_wait_event(nack_cvar.clone());
+            let nack_val = Value::from_rust_type(nack_evt);
+            let results = wn.thunk.call(&[nack_val], &mut ContBarrier::new()).await?;
+            let inner_val = results
+                .into_iter()
+                .next()
+                .ok_or_else(|| Exception::error("with-nack thunk returned no values"))?;
+            let inner = inner_val.try_to_rust_type::<BaseEvent>()?;
+            alts.push(inner);
+            nack_cvars.push(Some(nack_cvar));
+            outer_wraps.push(wn.wrap_fns.clone());
+        } else {
+            return Err(Exception::error("choose: expected events"));
+        }
+    }
 
     if alts.is_empty() {
         return Err(Exception::error("choose: no alternatives"));
     }
-    if alts.len() == 1 {
+    if alts.len() == 1 && nack_cvars[0].is_none() && outer_wraps[0].is_empty() {
         return perform_base(&alts[0]).await;
     }
 
@@ -201,7 +261,17 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
     enabled.shuffle(&mut rand::rng());
     for &i in &enabled {
         if let Some(value) = (alts[i].do_fn)() {
-            return apply_wraps(&alts[i].wrap_fns, value).await;
+            for (j, nack) in nack_cvars.iter().enumerate() {
+                if j != i {
+                    if let Some(cvar) = nack {
+                        cvar.signalled.store(true, Ordering::Release);
+                        cvar.notify.notify_waiters();
+                    }
+                }
+            }
+            let mut result = apply_wraps(&alts[i].wrap_fns, value).await?;
+            result = apply_wraps(&outer_wraps[i], result).await?;
+            return Ok(result);
         }
     }
 
@@ -249,7 +319,18 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
         }
     }
 
-    apply_wraps(&alts[winner_index].wrap_fns, value).await
+    for (i, nack) in nack_cvars.iter().enumerate() {
+        if i != winner_index {
+            if let Some(cvar) = nack {
+                cvar.signalled.store(true, Ordering::Release);
+                cvar.notify.notify_waiters();
+            }
+        }
+    }
+
+    let mut result = apply_wraps(&alts[winner_index].wrap_fns, value).await?;
+    result = apply_wraps(&outer_wraps[winner_index], result).await?;
+    Ok(result)
 }
 
 #[bridge(name = "%sync", lib = "(cml bridge)")]
@@ -279,20 +360,38 @@ pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Va
         };
         return Ok(vec![Value::from_rust_type(wrapped)]);
     }
+    if let Ok(wn) = evt_val.try_to_rust_type::<WithNackEvent>() {
+        let mut wraps = wn.wrap_fns.clone();
+        wraps.push(transform);
+        return Ok(vec![Value::from_rust_type(WithNackEvent {
+            thunk: wn.thunk.clone(),
+            wrap_fns: wraps,
+        })]);
+    }
     if let Ok(choice) = evt_val.try_to_rust_type::<ChoiceEvent>() {
         let mut wrapped_alts: Vec<Value> = Vec::new();
         for alt_val in &choice.alternatives {
-            let base = alt_val.try_to_rust_type::<BaseEvent>()?;
-            let mut wraps = base.wrap_fns.clone();
-            wraps.push(transform.clone());
-            let wrapped = BaseEvent {
-                poll_fn: base.poll_fn.clone(),
-                do_fn: base.do_fn.clone(),
-                block_fn: base.block_fn.clone(),
-                cancel_fn: base.cancel_fn.clone(),
-                wrap_fns: wraps,
-            };
-            wrapped_alts.push(Value::from_rust_type(wrapped));
+            if let Ok(base) = alt_val.try_to_rust_type::<BaseEvent>() {
+                let mut wraps = base.wrap_fns.clone();
+                wraps.push(transform.clone());
+                let wrapped = BaseEvent {
+                    poll_fn: base.poll_fn.clone(),
+                    do_fn: base.do_fn.clone(),
+                    block_fn: base.block_fn.clone(),
+                    cancel_fn: base.cancel_fn.clone(),
+                    wrap_fns: wraps,
+                };
+                wrapped_alts.push(Value::from_rust_type(wrapped));
+            } else if let Ok(wn) = alt_val.try_to_rust_type::<WithNackEvent>() {
+                let mut wraps = wn.wrap_fns.clone();
+                wraps.push(transform.clone());
+                wrapped_alts.push(Value::from_rust_type(WithNackEvent {
+                    thunk: wn.thunk.clone(),
+                    wrap_fns: wraps,
+                }));
+            } else {
+                return Err(Exception::error("wrap: unexpected alternative type"));
+            }
         }
         let choice = ChoiceEvent {
             alternatives: wrapped_alts,
@@ -310,6 +409,8 @@ pub async fn choose_bridge(evts: &[Value]) -> Result<Vec<Value>, Exception> {
             alternatives.push(v.clone());
         } else if let Ok(choice) = v.try_to_rust_type::<ChoiceEvent>() {
             alternatives.extend(choice.alternatives.iter().cloned());
+        } else if v.try_to_rust_type::<WithNackEvent>().is_ok() {
+            alternatives.push(v.clone());
         } else {
             return Err(Exception::error("choose: expected events"));
         }
@@ -454,6 +555,14 @@ pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
         do_fn,
         block_fn,
         cancel_fn,
+        wrap_fns: Vec::new(),
+    })])
+}
+
+#[bridge(name = "%with-nack", lib = "(cml bridge)")]
+pub async fn with_nack_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
+    Ok(vec![Value::from_rust_type(WithNackEvent {
+        thunk,
         wrap_fns: Vec::new(),
     })])
 }

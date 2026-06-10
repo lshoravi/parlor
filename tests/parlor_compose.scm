@@ -24,4 +24,22 @@
 (let ((result (sync (guard-evt (lambda () (sleep-evt 0.0))))))
   (display "guard passed\n"))
 
+;; wrap(wrap(ev, g), f) = wrap(ev, f . g)
+(let* ((ev (always-evt 3))
+       (nested (sync (wrap (wrap ev (lambda (x) (* x 10))) (lambda (x) (+ x 1)))))
+       (composed (sync (wrap ev (lambda (x) (+ (* x 10) 1))))))
+  (assert (= nested composed))
+  (assert (= nested 31))
+  (display "wrap-composition-law passed\n"))
+
+;; wrap(choose(ev1, ev2), f) = choose(wrap(ev1, f), wrap(ev2, f))
+(let* ((f (lambda (x) (* x 2)))
+       (ev1 (always-evt 5))
+       (ev2 (always-evt 7))
+       (lhs (sync (wrap (choose ev1 ev2) f)))
+       (rhs (sync (choose (wrap ev1 f) (wrap ev2 f)))))
+  (assert (or (= lhs 10) (= lhs 14)))
+  (assert (or (= rhs 10) (= rhs 14)))
+  (display "wrap-distribution-law passed\n"))
+
 (display "all composition tests passed\n")

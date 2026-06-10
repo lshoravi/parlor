@@ -1,15 +1,14 @@
 (import (rnrs) (parlor) (parlor channels) (parlor io) (parlor timers)
-        (parlor conditions) (parlor spawn)
-        (prefix (async) tokio/))
+        (parlor conditions) (parlor spawn))
 
 ;; --- Concurrent server exercising the full Parlor API ---
 ;;
 ;; Exercises: accept-evt, readable-evt, choose, wrap, guard-evt,
 ;; make-custom-event, channels (rendezvous + buffered), conditions,
 ;; notifiers, timers, with-nack, always-evt, never-evt, join-evt,
-;; event reuse, tokio/spawn
+;; event reuse, spawn-task
 
-(define listener (tokio/bind-tcp "127.0.0.1:0"))
+(define listener (bind-tcp "127.0.0.1:0"))
 (define addr (listener-address listener))
 (define shutdown-cv (make-condition))
 (define stats-ch (make-channel 100))
@@ -30,7 +29,7 @@
     (let ((result (sync (choose
                           (with-nack
                             (lambda (nack)
-                              (tokio/spawn
+                              (spawn-task
                                 (lambda ()
                                   (sync nack)
                                   (send nack-count-ch 'nack-fired)))
@@ -45,12 +44,12 @@
         (else
          (let ((client-port (cadr result))
                (client-addr (cddr result)))
-           (tokio/spawn (lambda () (handle-client client-port n)))
+           (spawn-task (lambda () (handle-client client-port n)))
            (loop (+ n 1))))))))
 
 ;; Stats collector using join-evt to await completion
 (define stats-collector
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (let loop ((handled 0) (total #f))
         (if (and total (= handled total))
@@ -63,8 +62,8 @@
                  (loop handled (cdr msg))))))))))
 
 ;; Start server
-(tokio/spawn (lambda () (accept-loop)))
-(tokio/sleep 50)
+(spawn-task (lambda () (accept-loop)))
+(sleep 0.05)
 (display "server started\n")
 
 ;; --- Client tests ---
@@ -76,7 +75,7 @@
   (close-port sock))
 (let ((sock (connect-tcp addr)))
   (close-port sock))
-(tokio/sleep 100)
+(sleep 0.1)
 (display "3 clients connected\n")
 
 ;; 2. Accept with timeout (no client — timeout should win)
@@ -121,8 +120,8 @@
 ;; 7. Channel rendezvous via choose
 (let ((ch1 (make-channel))
       (ch2 (make-channel)))
-  (tokio/spawn (lambda () (send ch1 'first)))
-  (tokio/spawn (lambda () (tokio/sleep 100) (send ch2 'second)))
+  (spawn-task (lambda () (send ch1 'first)))
+  (spawn-task (lambda () (sleep 0.1) (send ch2 'second)))
   (let ((result (sync (choose (recv-evt ch1) (recv-evt ch2)))))
     (assert (eq? result 'first))))
 (display "channel-choose passed\n")
@@ -130,7 +129,7 @@
 ;; 8. Buffered channel fan-in
 (let ((ch (make-channel 10))
       (done-ch (make-channel 1)))
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (let loop ((sum 0) (count 0))
         (if (= count 5)
@@ -169,7 +168,7 @@
          (sync (choose
                  (with-nack
                    (lambda (nack)
-                     (tokio/spawn
+                     (spawn-task
                        (lambda ()
                          (let ((reason (sync (choose
                                         (wrap nack (lambda (_) 'lost))
@@ -181,7 +180,7 @@
                  ;; fast timeout
                  (always-evt 'timeout)))))
   (assert (eq? result 'timeout))
-  (tokio/sleep 50)
+  (sleep 0.05)
   (assert (wait cleanup-fired))
   (display "rpc-with-nack-cleanup passed\n"))
 
@@ -194,13 +193,13 @@
 (display "wrap-over-with-nack passed\n")
 
 ;; 13. join-evt: await spawned task completion as a CML event
-(let* ((f (tokio/spawn (lambda () (* 6 7))))
+(let* ((f (spawn-task (lambda () (* 6 7))))
        (result (sync (join-evt f))))
   (assert (= result 42)))
 (display "join-evt passed\n")
 
 ;; 14. join-evt in choose: fast task beats timeout
-(let* ((f (tokio/spawn (lambda () (tokio/sleep 10) 'fast)))
+(let* ((f (spawn-task (lambda () (sleep 0.01) 'fast)))
        (result (sync (choose (join-evt f) (sleep-evt 5)))))
   (assert (eq? result 'fast)))
 (display "join-evt-choose passed\n")

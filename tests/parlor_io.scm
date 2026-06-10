@@ -1,7 +1,6 @@
-(import (rnrs) (parlor) (parlor io) (parlor timers) (parlor spawn)
-        (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor io) (parlor timers) (parlor spawn))
 
-(define listener (tokio/bind-tcp "127.0.0.1:0"))
+(define listener (bind-tcp "127.0.0.1:0"))
 (define addr (listener-address listener))
 
 ;; Test 1: accept with a connecting client
@@ -29,7 +28,7 @@
 ;; Test 3: accept-evt in choose (connection arrives)
 (spawn-task
   (lambda ()
-    (tokio/sleep 50)
+    (sleep 0.05)
     (let ((sock (connect-tcp addr)))
       (close-port sock))))
 

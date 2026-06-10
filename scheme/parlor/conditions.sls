@@ -1,7 +1,7 @@
-(library (cml conditions)
+(library (parlor conditions)
   (export make-condition signal! wait-evt wait
           make-notifier notify! notify-evt)
-  (import (rnrs) (cml conditions bridge) (cml bridge))
+  (import (rnrs) (parlor conditions bridge) (parlor bridge))
 
   (define (make-condition) (%make-condition))
   (define (signal! cv) (%signal! cv))

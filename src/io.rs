@@ -18,7 +18,7 @@ fn accept_result(socket: TcpStream, addr: std::net::SocketAddr) -> Value {
 
 // --- Networking helpers ---
 
-#[bridge(name = "%connect-tcp", lib = "(cml io bridge)")]
+#[bridge(name = "%connect-tcp", lib = "(parlor io bridge)")]
 pub async fn connect_tcp(addr: &Value) -> Result<Vec<Value>, Exception> {
     let addr: WideString = addr.clone().try_into()?;
     let stream = TcpStream::connect(&addr.to_string())
@@ -29,7 +29,7 @@ pub async fn connect_tcp(addr: &Value) -> Result<Vec<Value>, Exception> {
     Ok(vec![port])
 }
 
-#[bridge(name = "%listener-address", lib = "(cml io bridge)")]
+#[bridge(name = "%listener-address", lib = "(parlor io bridge)")]
 pub async fn listener_address(listener_val: &Value) -> Result<Vec<Value>, Exception> {
     let listener = listener_val.try_to_rust_type::<Arc<TcpListener>>()?;
     let addr = listener
@@ -38,9 +38,9 @@ pub async fn listener_address(listener_val: &Value) -> Result<Vec<Value>, Except
     Ok(vec![Value::from(addr.to_string())])
 }
 
-// --- CML events ---
+// --- Parlor events ---
 
-#[bridge(name = "%accept-evt", lib = "(cml io bridge)")]
+#[bridge(name = "%accept-evt", lib = "(parlor io bridge)")]
 pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Exception> {
     let listener = listener_val.try_to_rust_type::<Arc<TcpListener>>()?;
     let listener = (*listener).clone();
@@ -70,7 +70,7 @@ pub async fn accept_evt_bridge(listener_val: &Value) -> Result<Vec<Value>, Excep
     })])
 }
 
-#[bridge(name = "%readable-evt", lib = "(cml io bridge)")]
+#[bridge(name = "%readable-evt", lib = "(parlor io bridge)")]
 pub async fn readable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Exception> {
     let port: Port = port_val.clone().try_into().map_err(|_| {
         Exception::error("readable-evt: expected a port")
@@ -113,7 +113,7 @@ pub async fn readable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Excepti
     })])
 }
 
-#[bridge(name = "%writable-evt", lib = "(cml io bridge)")]
+#[bridge(name = "%writable-evt", lib = "(parlor io bridge)")]
 pub async fn writable_evt_bridge(port_val: &Value) -> Result<Vec<Value>, Exception> {
     let port: Port = port_val.clone().try_into().map_err(|_| {
         Exception::error("writable-evt: expected a port")

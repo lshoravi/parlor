@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (prefix (async) tokio/))
 
 (define (rpc-fib n)
   (if (< n 2)

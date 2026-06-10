@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml timers))
+(import (rnrs) (parlor) (parlor timers))
 
 (sleep 0.0)
 (display "zero-sleep passed\n")

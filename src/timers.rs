@@ -35,14 +35,14 @@ fn make_timer_event(duration: std::time::Duration) -> BaseEvent {
     }
 }
 
-#[bridge(name = "%sleep-evt", lib = "(cml timers bridge)")]
+#[bridge(name = "%sleep-evt", lib = "(parlor timers bridge)")]
 pub async fn sleep_evt(seconds: f64) -> Result<Vec<Value>, Exception> {
     let nanos = (seconds * 1_000_000_000.0) as u64;
     let duration = std::time::Duration::from_nanos(nanos);
     Ok(vec![Value::from_rust_type(make_timer_event(duration))])
 }
 
-#[bridge(name = "%timer-operation", lib = "(cml timers bridge)")]
+#[bridge(name = "%timer-operation", lib = "(parlor timers bridge)")]
 pub async fn timer_operation(expiry: f64) -> Result<Vec<Value>, Exception> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

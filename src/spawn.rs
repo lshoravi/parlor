@@ -10,7 +10,7 @@ use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, Re
 
 type Future = Shared<BoxFuture<'static, Result<Vec<Value>, Exception>>>;
 
-#[bridge(name = "%join-evt", lib = "(cml spawn bridge)")]
+#[bridge(name = "%join-evt", lib = "(parlor spawn bridge)")]
 pub async fn join_evt_bridge(future_val: &Value) -> Result<Vec<Value>, Exception> {
     let future = future_val.try_to_rust_type::<Future>()?;
     let (watch_tx, watch_rx) = watch::channel(None::<Value>);

@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers))
+(import (rnrs) (parlor) (parlor channels) (parlor timers))
 
 (let ((v (sync (always-evt 42))))
   (assert (= v 42))

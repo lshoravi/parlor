@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml io) (cml timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor io) (parlor timers) (prefix (async) tokio/))
 
 (define listener (tokio/bind-tcp "127.0.0.1:0"))
 (define addr (listener-address listener))

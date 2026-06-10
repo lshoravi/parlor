@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels))
+(import (rnrs) (parlor) (parlor channels))
 
 ;; Buffered channel: send doesn't block when buffer has space
 (let ((ch (make-channel 2)))

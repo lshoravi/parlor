@@ -31,83 +31,83 @@ fn run_scheme_test(filename: &str) {
 }
 
 #[test]
-fn test_cml_basic() {
-    run_scheme_test("cml_basic.scm");
+fn test_parlor_basic() {
+    run_scheme_test("parlor_basic.scm");
 }
 
 #[test]
-fn test_cml_channels() {
-    run_scheme_test("cml_channels.scm");
+fn test_parlor_channels() {
+    run_scheme_test("parlor_channels.scm");
 }
 
 #[test]
-fn test_cml_conditions() {
-    run_scheme_test("cml_conditions.scm");
+fn test_parlor_conditions() {
+    run_scheme_test("parlor_conditions.scm");
 }
 
 #[test]
-fn test_cml_compose() {
-    run_scheme_test("cml_compose.scm");
+fn test_parlor_compose() {
+    run_scheme_test("parlor_compose.scm");
 }
 
 #[test]
-fn test_cml_tasks() {
-    run_scheme_test("cml_tasks.scm");
+fn test_parlor_tasks() {
+    run_scheme_test("parlor_tasks.scm");
 }
 
 #[test]
-fn test_cml_integration() {
-    run_scheme_test("cml_integration.scm");
+fn test_parlor_integration() {
+    run_scheme_test("parlor_integration.scm");
 }
 
 #[test]
-fn test_cml_stress_channels() {
-    run_scheme_test("cml_stress_channels.scm");
+fn test_parlor_stress_channels() {
+    run_scheme_test("parlor_stress_channels.scm");
 }
 
 #[test]
-fn test_cml_stress_choose() {
-    run_scheme_test("cml_stress_choose.scm");
+fn test_parlor_stress_choose() {
+    run_scheme_test("parlor_stress_choose.scm");
 }
 
 #[test]
-fn test_cml_stress_tasks() {
-    run_scheme_test("cml_stress_tasks.scm");
+fn test_parlor_stress_tasks() {
+    run_scheme_test("parlor_stress_tasks.scm");
 }
 
 #[test]
-fn test_cml_stress_conditions() {
-    run_scheme_test("cml_stress_conditions.scm");
+fn test_parlor_stress_conditions() {
+    run_scheme_test("parlor_stress_conditions.scm");
 }
 
 #[test]
-fn test_cml_stress_mixed() {
-    run_scheme_test("cml_stress_mixed.scm");
+fn test_parlor_stress_mixed() {
+    run_scheme_test("parlor_stress_mixed.scm");
 }
 
 #[test]
-fn test_cml_api_coverage() {
-    run_scheme_test("cml_api_coverage.scm");
+fn test_parlor_api_coverage() {
+    run_scheme_test("parlor_api_coverage.scm");
 }
 
 #[test]
-fn test_cml_gc_double_decrement() {
-    run_scheme_test("cml_gc_double_decrement.scm");
+fn test_parlor_gc_double_decrement() {
+    run_scheme_test("parlor_gc_double_decrement.scm");
 }
 
 #[test]
-fn test_cml_gc_then_spawn() {
-    run_scheme_test("cml_gc_then_spawn.scm");
+fn test_parlor_gc_then_spawn() {
+    run_scheme_test("parlor_gc_then_spawn.scm");
 }
 
 #[test]
-fn test_cml_io() {
-    run_scheme_test("cml_io.scm");
+fn test_parlor_io() {
+    run_scheme_test("parlor_io.scm");
 }
 
 #[test]
-fn test_cml_echo_server() {
-    run_scheme_test("cml_echo_server.scm");
+fn test_parlor_echo_server() {
+    run_scheme_test("parlor_echo_server.scm");
 }
 
 #[tokio::test]
@@ -215,8 +215,8 @@ async fn test_cancelled_send_message_not_delivered() {
 // --- Gap #1: guard-evt + choose where all try-paths fail (block path) ---
 
 #[test]
-fn test_cml_guard_block_path() {
-    run_scheme_test("cml_guard_block_path.scm");
+fn test_parlor_guard_block_path() {
+    run_scheme_test("parlor_guard_block_path.scm");
 }
 
 // --- Gap #2: Channel protocol contention tests ---
@@ -337,8 +337,8 @@ async fn test_gc_after_many_cancelled_operations() {
 // --- Gap #3: timer-operation with absolute timestamps ---
 
 #[test]
-fn test_cml_timer_operation() {
-    run_scheme_test("cml_timer_operation.scm");
+fn test_parlor_timer_operation() {
+    run_scheme_test("parlor_timer_operation.scm");
 }
 
 // --- Gap #4: Buffered channel at-capacity blocking ---
@@ -507,8 +507,8 @@ async fn test_tcp_readable_writable_readiness() {
 // --- Gap #6: Negative/error-path tests ---
 
 #[test]
-fn test_cml_error_paths() {
-    run_scheme_test("cml_error_paths.scm");
+fn test_parlor_error_paths() {
+    run_scheme_test("parlor_error_paths.scm");
 }
 
 #[tokio::test]
@@ -523,26 +523,26 @@ async fn test_rust_buffered_channel_capacity_zero() {
 // --- Gap #7: Rendezvous send timeout via choose ---
 
 #[test]
-fn test_cml_send_timeout() {
-    run_scheme_test("cml_send_timeout.scm");
+fn test_parlor_send_timeout() {
+    run_scheme_test("parlor_send_timeout.scm");
 }
 
 #[test]
-fn test_cml_always_never() {
-    run_scheme_test("cml_always_never.scm");
+fn test_parlor_always_never() {
+    run_scheme_test("parlor_always_never.scm");
 }
 
 #[test]
-fn test_cml_poll_do_split() {
-    run_scheme_test("cml_poll_do_split.scm");
+fn test_parlor_poll_do_split() {
+    run_scheme_test("parlor_poll_do_split.scm");
 }
 
 #[test]
-fn test_cml_with_nack() {
-    run_scheme_test("cml_with_nack.scm");
+fn test_parlor_with_nack() {
+    run_scheme_test("parlor_with_nack.scm");
 }
 
 #[test]
-fn test_cml_spawn_join() {
-    run_scheme_test("cml_spawn_join.scm");
+fn test_parlor_spawn_join() {
+    run_scheme_test("parlor_spawn_join.scm");
 }

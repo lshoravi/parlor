@@ -7,7 +7,7 @@ use scheme_rs::value::Value;
 
 use crate::event::{BaseEvent, BlockFn, CancelFn, DoFn, Flag, OpState, PollFn, ResumeTx, cas};
 
-#[bridge(name = "%make-custom-event", lib = "(cml bridge)")]
+#[bridge(name = "%make-custom-event", lib = "(parlor bridge)")]
 pub async fn make_custom_event(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);

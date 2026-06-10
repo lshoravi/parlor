@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers))
+(import (rnrs) (parlor) (parlor channels) (parlor timers))
 
 ;; Test 1: choose with no alternatives should raise an error.
 (guard (exn (#t (display "choose-no-args error passed\n")))

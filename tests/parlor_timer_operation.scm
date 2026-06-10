@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml timers))
+(import (rnrs) (parlor) (parlor timers))
 
 ;; timer-operation takes an absolute UNIX timestamp (seconds since epoch).
 

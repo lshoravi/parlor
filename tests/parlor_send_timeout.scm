@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (prefix (async) tokio/))
 
 ;; Rendezvous channel send with no receiver: timer should win via choose.
 (let ((ch (make-channel)))

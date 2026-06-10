@@ -1,6 +1,6 @@
-(library (cml channels)
+(library (parlor channels)
   (export make-channel send-evt recv-evt send recv)
-  (import (rnrs) (cml channels bridge) (cml bridge))
+  (import (rnrs) (parlor channels bridge) (parlor bridge))
 
   (define make-channel
     (case-lambda

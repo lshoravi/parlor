@@ -25,7 +25,7 @@ unsafe impl Trace for Condition {
 
 impl SchemeCompatible for Condition {
     fn rtd() -> Arc<RecordTypeDescriptor> {
-        rtd!(name: "cml-condition", opaque: true, sealed: true)
+        rtd!(name: "parlor-condition", opaque: true, sealed: true)
     }
 }
 
@@ -43,11 +43,11 @@ unsafe impl Trace for Notifier {
 
 impl SchemeCompatible for Notifier {
     fn rtd() -> Arc<RecordTypeDescriptor> {
-        rtd!(name: "cml-notifier", opaque: true, sealed: true)
+        rtd!(name: "parlor-notifier", opaque: true, sealed: true)
     }
 }
 
-#[bridge(name = "%make-condition", lib = "(cml conditions bridge)")]
+#[bridge(name = "%make-condition", lib = "(parlor conditions bridge)")]
 pub async fn make_condition() -> Result<Vec<Value>, Exception> {
     let cond = Condition {
         notify: Arc::new(Notify::new()),
@@ -56,7 +56,7 @@ pub async fn make_condition() -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from_rust_type(cond)])
 }
 
-#[bridge(name = "%signal!", lib = "(cml conditions bridge)")]
+#[bridge(name = "%signal!", lib = "(parlor conditions bridge)")]
 pub async fn signal(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     let cv = cv_val.try_to_rust_type::<Condition>()?;
     let was_first = !cv.signalled.swap(true, Ordering::AcqRel);
@@ -111,14 +111,14 @@ pub fn make_wait_event(cond: Condition) -> BaseEvent {
     }
 }
 
-#[bridge(name = "%wait-evt", lib = "(cml conditions bridge)")]
+#[bridge(name = "%wait-evt", lib = "(parlor conditions bridge)")]
 pub async fn wait_evt(cv_val: &Value) -> Result<Vec<Value>, Exception> {
     let cv = cv_val.try_to_rust_type::<Condition>()?;
     let event = make_wait_event((*cv).clone());
     Ok(vec![Value::from_rust_type(event)])
 }
 
-#[bridge(name = "%make-notifier", lib = "(cml conditions bridge)")]
+#[bridge(name = "%make-notifier", lib = "(parlor conditions bridge)")]
 pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
     let n = Notifier {
         sem: Arc::new(Semaphore::new(0)),
@@ -126,14 +126,14 @@ pub async fn make_notifier() -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from_rust_type(n)])
 }
 
-#[bridge(name = "%notify!", lib = "(cml conditions bridge)")]
+#[bridge(name = "%notify!", lib = "(parlor conditions bridge)")]
 pub async fn notify(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<Notifier>()?;
     n.sem.add_permits(1);
     Ok(vec![])
 }
 
-#[bridge(name = "%notify-evt", lib = "(cml conditions bridge)")]
+#[bridge(name = "%notify-evt", lib = "(parlor conditions bridge)")]
 pub async fn notify_evt(n_val: &Value) -> Result<Vec<Value>, Exception> {
     let n = n_val.try_to_rust_type::<Notifier>()?;
     let sem = n.sem.clone();

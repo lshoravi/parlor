@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (cml conditions))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor conditions))
 
 (let ((ch (make-channel 1)))
   (do ((iter 0 (+ iter 1)))

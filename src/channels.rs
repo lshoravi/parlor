@@ -126,7 +126,7 @@ unsafe impl Trace for Channel {
 impl SchemeCompatible for Channel {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(
-            name: "cml-channel",
+            name: "parlor-channel",
             opaque: true,
             sealed: true,
         )
@@ -395,12 +395,12 @@ pub fn send_event(channel: Channel, msg: Value) -> BaseEvent {
     }
 }
 
-#[bridge(name = "%make-rendezvous-channel", lib = "(cml channels bridge)")]
+#[bridge(name = "%make-rendezvous-channel", lib = "(parlor channels bridge)")]
 pub async fn make_rendezvous_channel() -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from_rust_type(Channel::new_rendezvous())])
 }
 
-#[bridge(name = "%make-buffered-channel", lib = "(cml channels bridge)")]
+#[bridge(name = "%make-buffered-channel", lib = "(parlor channels bridge)")]
 pub async fn make_buffered_channel(capacity: usize) -> Result<Vec<Value>, Exception> {
     if capacity == 0 {
         return Err(Exception::error("buffered channel capacity must be > 0"));
@@ -410,14 +410,14 @@ pub async fn make_buffered_channel(capacity: usize) -> Result<Vec<Value>, Except
     ))])
 }
 
-#[bridge(name = "%send-evt", lib = "(cml channels bridge)")]
+#[bridge(name = "%send-evt", lib = "(parlor channels bridge)")]
 pub async fn send_evt_bridge(ch_val: &Value, msg: &Value) -> Result<Vec<Value>, Exception> {
     let channel = ch_val.try_to_rust_type::<Channel>()?;
     let event = send_event((*channel).clone(), msg.clone());
     Ok(vec![Value::from_rust_type(event)])
 }
 
-#[bridge(name = "%recv-evt", lib = "(cml channels bridge)")]
+#[bridge(name = "%recv-evt", lib = "(parlor channels bridge)")]
 pub async fn recv_evt_bridge(ch_val: &Value) -> Result<Vec<Value>, Exception> {
     let channel = ch_val.try_to_rust_type::<Channel>()?;
     let event = recv_event((*channel).clone());

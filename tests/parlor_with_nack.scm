@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (cml conditions)
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor conditions)
         (prefix (async) tokio/))
 
 ;; Loser's nack fires

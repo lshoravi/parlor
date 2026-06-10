@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml conditions))
+(import (rnrs) (parlor) (parlor conditions))
 
 ;; Condition: first signal returns #t, second returns #f
 (let ((cv (make-condition)))

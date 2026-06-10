@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers))
+(import (rnrs) (parlor) (parlor channels) (parlor conditions) (parlor timers))
 
 (sync (sleep-evt 0.0))
 (display "sync passed\n")

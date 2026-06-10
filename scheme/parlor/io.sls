@@ -1,7 +1,7 @@
-(library (cml io)
+(library (parlor io)
   (export accept-evt readable-evt writable-evt
           accept connect-tcp listener-address)
-  (import (rnrs) (cml) (cml io bridge))
+  (import (rnrs) (parlor) (parlor io bridge))
 
   (define (accept-evt listener) (%accept-evt listener))
   (define (readable-evt port) (%readable-evt port))

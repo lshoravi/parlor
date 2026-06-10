@@ -1,7 +1,7 @@
-(library (cml)
+(library (parlor)
   (export sync choose wrap guard-evt
           make-custom-event always-evt never-evt with-nack)
-  (import (rnrs) (cml bridge))
+  (import (rnrs) (parlor bridge))
 
   (define (sync evt) (%sync evt))
   (define (choose . evts) (apply %choose evts))

@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (cml conditions))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor conditions))
 
 ;; Stress test: many wrap operations to trigger double-decrement of
 ;; Procedure refcounts in BaseEvent::finalize vs visit_children.

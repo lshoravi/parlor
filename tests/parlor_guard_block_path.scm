@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (prefix (async) tokio/))
 
 ;; Regression test for commit 171801ab:
 ;; guard-evt inside choose where all try_fns return None, forcing

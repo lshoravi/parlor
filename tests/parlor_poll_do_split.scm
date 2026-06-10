@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers))
+(import (rnrs) (parlor) (parlor channels) (parlor timers))
 
 (let loop ((i 0) (saw-1 #f) (saw-2 #f))
   (if (and saw-1 saw-2)

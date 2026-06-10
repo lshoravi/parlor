@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml timers) (cml conditions))
+(import (rnrs) (parlor) (parlor timers) (parlor conditions))
 
 ;; wrap transforms the result
 (let ((result (sync (wrap (sleep-evt 0.0) (lambda (_) 'wrapped)))))

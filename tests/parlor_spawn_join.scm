@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml timers) (cml spawn) (async))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor spawn) (async))
 
 ;; Basic: spawn returns future, join-evt fires with result
 (let* ((f (spawn (lambda () 42)))

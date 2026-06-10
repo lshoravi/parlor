@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (cml conditions) (cml timers)
+(import (rnrs) (parlor) (parlor channels) (parlor conditions) (parlor timers)
         (prefix (async) tokio/))
 
 ;; Simulated paint loop: notifier wakes paint task, event channel dispatches

@@ -1,4 +1,4 @@
-(import (rnrs) (cml) (cml channels) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (prefix (async) tokio/))
 
 (let ((result-ch (make-channel 20)))
   (do ((i 0 (+ i 1)))

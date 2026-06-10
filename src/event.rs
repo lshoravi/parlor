@@ -82,7 +82,7 @@ unsafe impl Trace for WithNackEvent {
 
 impl SchemeCompatible for WithNackEvent {
     fn rtd() -> Arc<RecordTypeDescriptor> {
-        rtd!(name: "cml-with-nack-event", opaque: true, sealed: true)
+        rtd!(name: "parlor-with-nack-event", opaque: true, sealed: true)
     }
 }
 
@@ -127,7 +127,7 @@ unsafe impl Trace for BaseEvent {
 impl SchemeCompatible for BaseEvent {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(
-            name: "cml-event",
+            name: "parlor-event",
             opaque: true,
             sealed: true,
         )
@@ -160,7 +160,7 @@ unsafe impl Trace for ChoiceEvent {
 impl SchemeCompatible for ChoiceEvent {
     fn rtd() -> Arc<RecordTypeDescriptor> {
         rtd!(
-            name: "cml-choice-event",
+            name: "parlor-choice-event",
             opaque: true,
             sealed: true,
         )
@@ -333,7 +333,7 @@ pub async fn perform_choice(choice: &ChoiceEvent) -> Result<Value, Exception> {
     Ok(result)
 }
 
-#[bridge(name = "%sync", lib = "(cml bridge)")]
+#[bridge(name = "%sync", lib = "(parlor bridge)")]
 pub async fn sync_bridge(evt_val: &Value) -> Result<Vec<Value>, Exception> {
     if let Ok(event) = evt_val.try_to_rust_type::<BaseEvent>() {
         let result = perform_base(&event).await?;
@@ -346,7 +346,7 @@ pub async fn sync_bridge(evt_val: &Value) -> Result<Vec<Value>, Exception> {
     Err(Exception::error("sync: expected an event"))
 }
 
-#[bridge(name = "%wrap", lib = "(cml bridge)")]
+#[bridge(name = "%wrap", lib = "(parlor bridge)")]
 pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Value>, Exception> {
     if let Ok(event) = evt_val.try_to_rust_type::<BaseEvent>() {
         let mut wraps = event.wrap_fns.clone();
@@ -401,7 +401,7 @@ pub async fn wrap_bridge(evt_val: &Value, transform: Procedure) -> Result<Vec<Va
     Err(Exception::error("wrap: expected an event"))
 }
 
-#[bridge(name = "%choose", lib = "(cml bridge)")]
+#[bridge(name = "%choose", lib = "(parlor bridge)")]
 pub async fn choose_bridge(evts: &[Value]) -> Result<Vec<Value>, Exception> {
     let mut alternatives: Vec<Value> = Vec::new();
     for v in evts {
@@ -473,7 +473,7 @@ fn guard_sync_choice(choice: &ChoiceEvent, flag: Flag, tx: ResumeTx) {
     });
 }
 
-#[bridge(name = "%guard-evt", lib = "(cml bridge)")]
+#[bridge(name = "%guard-evt", lib = "(parlor bridge)")]
 pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
@@ -517,7 +517,7 @@ pub async fn guard_evt_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception>
     Ok(vec![Value::from_rust_type(event)])
 }
 
-#[bridge(name = "%always-evt", lib = "(cml bridge)")]
+#[bridge(name = "%always-evt", lib = "(parlor bridge)")]
 pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| true);
 
@@ -543,7 +543,7 @@ pub async fn always_evt_bridge(val: &Value) -> Result<Vec<Value>, Exception> {
     })])
 }
 
-#[bridge(name = "%never-evt", lib = "(cml bridge)")]
+#[bridge(name = "%never-evt", lib = "(parlor bridge)")]
 pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
     let poll_fn: PollFn = Arc::new(|| false);
     let do_fn: DoFn = Arc::new(|| None);
@@ -559,7 +559,7 @@ pub async fn never_evt_bridge() -> Result<Vec<Value>, Exception> {
     })])
 }
 
-#[bridge(name = "%with-nack", lib = "(cml bridge)")]
+#[bridge(name = "%with-nack", lib = "(parlor bridge)")]
 pub async fn with_nack_bridge(thunk: Procedure) -> Result<Vec<Value>, Exception> {
     Ok(vec![Value::from_rust_type(WithNackEvent {
         thunk,

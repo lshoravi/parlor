@@ -541,3 +541,8 @@ fn test_cml_poll_do_split() {
 fn test_cml_with_nack() {
     run_scheme_test("cml_with_nack.scm");
 }
+
+#[test]
+fn test_cml_spawn_join() {
+    run_scheme_test("cml_spawn_join.scm");
+}

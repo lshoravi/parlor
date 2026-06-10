@@ -1,4 +1,4 @@
-(import (rnrs) (parlor) (parlor channels) (parlor timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor spawn))
 
 ;; Rendezvous channel send with no receiver: timer should win via choose.
 (let ((ch (make-channel)))
@@ -16,7 +16,7 @@
           (wrap (send-evt ch 'abandoned) (lambda (_) 'sent))
           (wrap (sleep-evt 0.05) (lambda (_) 'timeout))))
   ;; Now do a proper rendezvous to prove the channel still works.
-  (tokio/spawn (lambda ()
+  (spawn-task (lambda ()
                  (let ((val (recv ch)))
                    (send result-ch val))))
   (send ch 'after-timeout)

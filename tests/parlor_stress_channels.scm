@@ -1,12 +1,12 @@
-(import (rnrs) (parlor) (parlor channels) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor spawn))
 
 (define (rpc-fib n)
   (if (< n 2)
       n
       (let ((ch1 (make-channel 1))
             (ch2 (make-channel 1)))
-        (tokio/spawn (lambda () (send ch1 (rpc-fib (- n 1)))))
-        (tokio/spawn (lambda () (send ch2 (rpc-fib (- n 2)))))
+        (spawn-task (lambda () (send ch1 (rpc-fib (- n 1)))))
+        (spawn-task (lambda () (send ch2 (rpc-fib (- n 2)))))
         (+ (recv ch1) (recv ch2)))))
 
 (let ((result (rpc-fib 15)))
@@ -16,7 +16,7 @@
 (let ((req-ch (make-channel 5))
       (done-ch (make-channel 5)))
 
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (let loop ((i 0))
         (when (< i 500)
@@ -26,7 +26,7 @@
 
   (do ((c 0 (+ c 1)))
       ((= c 5))
-    (tokio/spawn
+    (spawn-task
       (lambda ()
         (do ((r 0 (+ r 1)))
             ((= r 100))
@@ -44,7 +44,7 @@
   (do ((p 0 (+ p 1)))
       ((= p 20))
     (let ((pid p))
-      (tokio/spawn
+      (spawn-task
         (lambda ()
           (do ((i 0 (+ i 1)))
               ((= i 50))

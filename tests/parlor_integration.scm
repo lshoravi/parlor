@@ -1,5 +1,5 @@
 (import (rnrs) (parlor) (parlor channels) (parlor conditions) (parlor timers)
-        (prefix (async) tokio/))
+        (parlor spawn))
 
 ;; Simulated paint loop: notifier wakes paint task, event channel dispatches
 (let ((repaint (make-notifier))
@@ -7,7 +7,7 @@
       (output (make-channel 10)))
 
   ;; Paint task: wait for notification, report, loop 3 times
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (let loop ((count 0))
         (if (= count 3)
@@ -18,7 +18,7 @@
               (loop (+ count 1)))))))
 
   ;; Event dispatch: receive events, signal repaint
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (let loop ((i 0))
         (when (< i 3)

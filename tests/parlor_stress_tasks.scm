@@ -1,10 +1,10 @@
-(import (rnrs) (parlor) (parlor channels) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor spawn))
 
 (let ((result-ch (make-channel 20)))
   (do ((i 0 (+ i 1)))
       ((= i 20))
     (let ((idx i))
-      (tokio/spawn (lambda () (send result-ch idx)))))
+      (spawn-task (lambda () (send result-ch idx)))))
   (let loop ((count 0) (sum 0))
     (if (= count 20)
         (begin
@@ -23,7 +23,7 @@
         ((= stage 10))
       (let ((in-ch (list-ref chs stage))
             (out-ch (list-ref chs (+ stage 1))))
-        (tokio/spawn
+        (spawn-task
           (lambda ()
             (send out-ch (+ (recv in-ch) 1))))))
     (send input-ch 0)
@@ -35,14 +35,14 @@
       (done1 (make-channel 1))
       (done2 (make-channel 1)))
   (send mutex 0)
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (do ((i 0 (+ i 1)))
           ((= i 25))
         (let ((val (recv mutex)))
           (send mutex (+ val 1))))
       (send done1 'ok)))
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (do ((i 0 (+ i 1)))
           ((= i 25))

@@ -1,5 +1,5 @@
 (import (rnrs) (parlor) (parlor channels) (parlor conditions) (parlor timers)
-        (prefix (async) tokio/))
+        (parlor spawn))
 
 (let ((base (make-custom-event (lambda () 0))))
   (let loop ((evt base) (depth 0))
@@ -20,7 +20,7 @@
 (let ((done-ch (make-channel 20)))
   (do ((t 0 (+ t 1)))
       ((= t 20))
-    (tokio/spawn
+    (spawn-task
       (lambda ()
         (let ((ch (make-channel 10)))
           (do ((i 0 (+ i 1)))

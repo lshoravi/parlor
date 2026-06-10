@@ -1,5 +1,5 @@
 (import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor conditions)
-        (prefix (async) tokio/))
+        (parlor spawn))
 
 ;; Loser's nack fires
 (let* ((nack-fired (make-condition))
@@ -7,7 +7,7 @@
        (result (sync (choose
                  (with-nack
                    (lambda (nack)
-                     (tokio/spawn (lambda ()
+                     (spawn-task (lambda ()
                        (sync nack)
                        (signal! nack-fired)))
                      (recv-evt ch)))
@@ -22,7 +22,7 @@
        (result (sync (choose
                  (with-nack
                    (lambda (nack)
-                     (tokio/spawn (lambda ()
+                     (spawn-task (lambda ()
                        (sync nack)
                        (signal! nack-fired)))
                      (always-evt 99)))

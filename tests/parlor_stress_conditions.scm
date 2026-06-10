@@ -1,11 +1,11 @@
 (import (rnrs) (parlor) (parlor channels) (parlor conditions) (parlor timers)
-        (prefix (async) tokio/))
+        (parlor spawn) (prefix (async) tokio/))
 
 (let ((cv (make-condition))
       (results (make-channel 20)))
   (do ((i 0 (+ i 1)))
       ((= i 20))
-    (tokio/spawn
+    (spawn-task
       (lambda ()
         (wait cv)
         (send results 'done))))
@@ -26,7 +26,7 @@
   (do ((i 0 (+ i 1)))
       ((= i 50))
     (notify! n))
-  (tokio/spawn
+  (spawn-task
     (lambda ()
       (do ((i 0 (+ i 1)))
           ((= i 50))

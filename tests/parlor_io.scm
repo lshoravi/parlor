@@ -1,10 +1,11 @@
-(import (rnrs) (parlor) (parlor io) (parlor timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor io) (parlor timers) (parlor spawn)
+        (prefix (async) tokio/))
 
 (define listener (tokio/bind-tcp "127.0.0.1:0"))
 (define addr (listener-address listener))
 
 ;; Test 1: accept with a connecting client
-(tokio/spawn
+(spawn-task
   (lambda ()
     (let ((sock (connect-tcp addr)))
       (close-port sock))))
@@ -15,7 +16,7 @@
 (display "accept passed\n")
 
 ;; Test 2: accept-evt
-(tokio/spawn
+(spawn-task
   (lambda ()
     (let ((sock (connect-tcp addr)))
       (close-port sock))))
@@ -26,7 +27,7 @@
 (display "accept-evt passed\n")
 
 ;; Test 3: accept-evt in choose (connection arrives)
-(tokio/spawn
+(spawn-task
   (lambda ()
     (tokio/sleep 50)
     (let ((sock (connect-tcp addr)))

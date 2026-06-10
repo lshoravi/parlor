@@ -1,4 +1,5 @@
-(import (rnrs) (parlor) (parlor channels) (parlor timers) (prefix (async) tokio/))
+(import (rnrs) (parlor) (parlor channels) (parlor timers) (parlor spawn)
+        (prefix (async) tokio/))
 
 ;; Regression test for commit 171801ab:
 ;; guard-evt inside choose where all try_fns return None, forcing
@@ -22,7 +23,7 @@
 ;; The guard-evt block path should deliver the message.
 (let ((ch1 (make-channel))
       (ch2 (make-channel)))
-  (tokio/spawn (lambda () (tokio/sleep 50) (send ch1 'from-ch1)))
+  (spawn-task (lambda () (tokio/sleep 50) (send ch1 'from-ch1)))
   (let ((result (sync (choose
                          (guard-evt (lambda ()
                                       (choose (recv-evt ch1) (recv-evt ch2))))
@@ -33,7 +34,7 @@
 ;; guard-evt returning a single event (not a choice) that also
 ;; requires the block path.
 (let ((ch (make-channel)))
-  (tokio/spawn (lambda () (tokio/sleep 30) (send ch 'delivered)))
+  (spawn-task (lambda () (tokio/sleep 30) (send ch 'delivered)))
   (let ((result (sync (choose
                          (guard-evt (lambda () (recv-evt ch)))
                          (wrap (sleep-evt 5.0) (lambda (_) 'timeout))))))

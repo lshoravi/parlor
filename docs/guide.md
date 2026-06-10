@@ -70,7 +70,7 @@ This split is why `choose` is fair. Without it, the first alternative would alwa
         (with-nack
           (lambda (nack)
             ;; launch cleanup watcher
-            (tokio/spawn (lambda () (sync nack) (do-cleanup)))
+            (spawn-task (lambda () (sync nack) (do-cleanup)))
             (recv-evt request-ch)))
         (wrap (sleep-evt 5.0) (lambda (_) 'timeout))))
 ```
@@ -94,7 +94,7 @@ This split is why `choose` is fair. Without it, the first alternative would alwa
     (sync (choose
             (with-nack
               (lambda (nack)
-                (tokio/spawn
+                (spawn-task
                   (lambda ()
                     (let ((reason (sync (choose
                                     (wrap nack (lambda (_) 'lost))
@@ -116,7 +116,7 @@ Without the done condition, the watcher task sits forever waiting on a nack that
 
 ;; N producers
 (do ((i 0 (+ i 1))) ((= i 10))
-  (tokio/spawn (lambda () (send ch (compute i)))))
+  (spawn-task (lambda () (send ch (compute i)))))
 
 ;; consumer
 (let loop ((results '()))
@@ -130,7 +130,7 @@ Without the done condition, the watcher task sits forever waiting on a nack that
 ```scheme
 (define futures
   (map (lambda (job)
-         (tokio/spawn (lambda () (process job))))
+         (spawn-task (lambda () (process job))))
        jobs))
 
 (define results

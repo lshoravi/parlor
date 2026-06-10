@@ -162,6 +162,11 @@ Synchronous accept. Equivalent to `(sync (accept-evt listener))`.
 
 Connect to a TCP address (e.g., `"127.0.0.1:8080"`). Returns a binary I/O port. This is not an event constructor; it blocks until connected.
 
+### bind-tcp
+`(bind-tcp addr-string) -> listener`
+
+Bind a TCP listener to an address (e.g., `"127.0.0.1:0"`). Returns a listener for use with `accept-evt` and `listener-address`.
+
 ### listener-address
 `(listener-address listener) -> string`
 
@@ -169,14 +174,17 @@ Return the local address of a TCP listener as a string.
 
 ## Spawn — `(parlor spawn)`
 
-Note: `tokio/spawn` and `tokio/bind-tcp` come from `(async)`, not parlor.
+### spawn-task
+`(spawn-task thunk) -> future`
+
+Spawn a tokio task from a zero-argument procedure. Returns a future that can be passed to `join-evt`.
 
 ### join-evt
 `(join-evt future) -> event`
 
-An event that fires when a spawned task completes. `future` is the value returned by `tokio/spawn`. Fires with the task's return value.
+An event that fires when a spawned task completes. `future` is the value returned by `spawn-task`. Fires with the task's return value.
 
 ```scheme
-(define f (tokio/spawn (lambda () (* 6 7))))
+(define f (spawn-task (lambda () (* 6 7))))
 (assert (= (sync (join-evt f)) 42))
 ```

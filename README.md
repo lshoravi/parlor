@@ -22,10 +22,10 @@ This is not SML/NJ CML. There is no preemptive scheduling; everything runs coope
 
 ```scheme
 ;; rendezvous send/recv
-(import (parlor) (parlor channels) (prefix (async) tokio/))
+(import (parlor) (parlor channels) (parlor spawn))
 
 (define ch (make-channel))
-(tokio/spawn (lambda () (send ch 'hello)))
+(spawn-task (lambda () (send ch 'hello)))
 (assert (eq? (recv ch) 'hello))
 ```
 
@@ -43,7 +43,7 @@ This is not SML/NJ CML. There is no preemptive scheduling; everything runs coope
 (select
   (with-nack
     (lambda (nack)
-      (tokio/spawn
+      (spawn-task
         (lambda ()
           (select (wrap nack (lambda (_) 'lost))
                   (wrap (wait-evt done) (lambda (_) 'won)))))
@@ -53,7 +53,7 @@ This is not SML/NJ CML. There is no preemptive scheduling; everything runs coope
 
 ```scheme
 ;; join-evt: await a spawned task as an event
-(define f (tokio/spawn (lambda () (* 6 7))))
+(define f (spawn-task (lambda () (* 6 7))))
 (assert (= (sync (join-evt f)) 42))
 ```
 
@@ -65,7 +65,7 @@ This is not SML/NJ CML. There is no preemptive scheduling; everything runs coope
 | `(parlor channels)` | `make-channel` `send-evt` `recv-evt` `send` `recv` |
 | `(parlor conditions)` | `make-condition` `signal!` `wait-evt` `wait` `make-notifier` `notify!` `notify-evt` |
 | `(parlor timers)` | `sleep-evt` `sleep` `timer-operation` |
-| `(parlor io)` | `accept-evt` `readable-evt` `writable-evt` `accept` `connect-tcp` `listener-address` |
-| `(parlor spawn)` | `join-evt` |
+| `(parlor io)` | `accept-evt` `readable-evt` `writable-evt` `accept` `connect-tcp` `bind-tcp` `listener-address` |
+| `(parlor spawn)` | `spawn-task` `join-evt` |
 
 See [docs/guide.md](docs/guide.md) for the programming model and [docs/api.md](docs/api.md) for the full API reference.
